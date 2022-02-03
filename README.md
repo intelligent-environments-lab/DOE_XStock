@@ -1,6 +1,6 @@
 # DOE XStock
 ## Description
-This repository is used to manage DOE's [End Use Load Profiles for the U.S. Building Stock](https://www.nrel.gov/buildings/end-use-load-profiles.html) data by providing an Pythonic interface to download and store the [full dataset](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F) in a local SQLite database as well as run EnergyPlus simulations on the contained OSM models. Refer to the [End Use Load Profiles for the U.S. Building Stock README.md](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F) for more details on the full dataset.
+This repository is used to manage DOE's [End Use Load Profiles for the U.S. Building Stock](https://www.nrel.gov/buildings/end-use-load-profiles.html) data by providing an Pythonic interface to download and store the [full dataset](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F) in a local SQLite database as well as run EnergyPlus simulations on the contained OSM models. Refer to the [README.md](https://data.openei.org/s3_viewer?bucket=oedi-data-lake&prefix=nrel-pds-building-stock%2Fend-use-load-profiles-for-us-building-stock%2F) for more details on the full dataset.
 
 ## Installation
 To install, clone the latest version of the repository from the project's homepage or install the Python package using `pip`. To clone, execute:
@@ -14,7 +14,7 @@ python -m pip install git+https://github.com/intelligent-environments-lab/doe_xs
 ```
 
 ## Dependencies
-The project's Python 3rd party library dependencies are listed in [requirements.txt](https://github.com/https://github.com/intelligent-environments-lab/doe_xstock/blob/master/requirements.txt). The dependencies are automatically fulfilled if installed with `pip`.
+The project's Python 3rd party library dependencies are listed in [requirements.txt](https://github.com/intelligent-environments-lab/DOE_XStock/blob/master/requirements.txt). The dependencies are automatically fulfilled if installed with `pip`.
 
 Download [EnergyPlus 9.6.0](https://energyplus.net/downloads) to be able to run building energy model simulations.
 
@@ -152,7 +152,7 @@ python -m doe_xstock -h
 ```
 
 ### Workflow
-To insert and simulate multiple files uisng the CLI, edit [insert_filters.json](https://github.com/https://github.com/intelligent-environments-lab/doe_xstock/blob/master/workflow/insert_filters.json), and [simulate.csv](https://github.com/https://github.com/intelligent-environments-lab/doe_xstock/blob/master/workflow/simulate.csv) to specify metadata filters for database insertion and buildings for simulation respectively. Also, edit the constant values in [](https://github.com/https://github.com/intelligent-environments-lab/doe_xstock/blob/master/workflow/insert_and_filter.sh) to meet insertion and simulation needs as well as point to relevant filepaths. Finally, execute:
+To insert and simulate multiple files uisng the CLI, edit [insert_filters.json](https://github.com/intelligent-environments-lab/doe_xstock/blob/master/workflow/insert_filters.json), and [simulate.csv](https://github.com/intelligent-environments-lab/doe_xstock/blob/master/workflow/simulate.csv) to specify metadata filters for database insertion and buildings for simulation respectively. Also, edit the constant values in [](https://github.com/intelligent-environments-lab/doe_xstock/blob/master/workflow/insert_and_filter.sh) to meet insertion and simulation needs as well as point to relevant filepaths. Finally, execute:
 ```console
 sh workflow/insert_and_simulate.sh
 ```
