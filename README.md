@@ -60,7 +60,7 @@ database.insert_dataset(
 )
 ```
 
-The example above will insert data into a number of tables that are relevant to the combination of dataset fields and the `filter` argument. The `filter` argument is a dictionary of metadata columns as keys and list of interested enumerations as values. The database schema can be retrieved by executing the following:
+The example above will insert data into a number of tables that are relevant to the combination of dataset fields and the `filters` argument. The `filters` argument is a dictionary of metadata columns as keys and list of interested enumerations as values. The database schema can be retrieved by executing the following:
 
 ```python
 from doe_xstock.doe_xstock import DOEXStockDatabase
