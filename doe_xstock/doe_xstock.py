@@ -1,0 +1,459 @@
+from enum import Enum
+import gzip
+import io
+import logging
+import logging.config
+import os
+from bs4 import BeautifulSoup
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+import urllib3
+from doe_xstock.database import SQLiteDatabase
+from doe_xstock.simulate import OpenStudioModelEditor, Simulator
+from doe_xstock.utilities import read_json, write_data
+
+logging_config = read_json(os.path.join(os.path.dirname(__file__),'misc/logging_config.json'))
+logging.config.dictConfig(logging_config)
+LOGGER = logging.getLogger('doe_xstock')
+
+class DOEXStock:
+    DEFAULT_DATABASE_FILEPATH = 'doe_xstock.db'
+
+    @staticmethod
+    def insert(**kwargs):
+        LOGGER.info(f'Started insert.')
+        database = DOEXStockDatabase(
+            kwargs.pop('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH),
+            overwrite=kwargs.pop('overwrite',False),
+            apply_changes=kwargs.pop('apply_changes',False)
+        )
+        filters = read_json(kwargs.pop('filters_filepath')) if kwargs.get('filters_filepath') is not None else None
+        kwargs = {key:value for key,value in kwargs.items() if key in ['dataset_type','weather_data','year_of_publication','release']}
+        kwargs = {**kwargs,'filters':filters}
+        database.insert_dataset(**kwargs)
+        LOGGER.info(f'Ended insert.')
+
+    @staticmethod    
+    def simulate(**kwargs):
+        LOGGER.info(f'Started simulation.')
+        dataset_type = kwargs['dataset_type']
+        weather_data = kwargs['weather_data']
+        year_of_publication = kwargs['year_of_publication']
+        release = kwargs['release']
+        bldg_id = kwargs['bldg_id']
+        upgrade = kwargs['upgrade']
+        simulation_id = f'{dataset_type}_{weather_data}_{year_of_publication}_release_{release}_{bldg_id}_{upgrade}'
+        LOGGER.info(f'Simulation ID: {simulation_id}')
+        database_filepath = kwargs.pop('filepath',None)
+        assert os.path.isfile(database_filepath), f'Database with filepath {database_filepath} does not exist. Initalize database first.' 
+        database = DOEXStockDatabase(database_filepath,overwrite=kwargs.pop('overwrite',False),apply_changes=kwargs.pop('apply_changes',False))
+        idd_filepath = kwargs['idd_filepath']
+        root_output_directory = kwargs.get('root_output_directory','')
+        # get input data for simulation
+        simulation_data = database.query_table(f"""
+        SELECT 
+            i.metadata_id,
+            i.bldg_osm AS osm, 
+            i.bldg_epw AS epw
+        FROM building_energy_performance_simulation_input i
+        LEFT JOIN metadata m ON m.id = i.metadata_id
+        WHERE 
+            i.dataset_type = '{dataset_type}'
+            AND i.dataset_weather_data = '{weather_data}'
+            AND i.dataset_year_of_publication = {year_of_publication}
+            AND i.dataset_release = {release}
+            AND i.bldg_id = {bldg_id}
+            AND i.bldg_upgrade = {upgrade}
+        """)
+        simulation_data = simulation_data.to_dict(orient='records')[0]
+        assert simulation_data['osm'] is not None, f'osm not found.'
+        assert simulation_data['epw'] is not None, f'epw not found.'
+        output_directory = f'output_{simulation_id}'
+        output_directory = os.path.join(root_output_directory,output_directory) if root_output_directory is not None else output_directory
+        schedules_filename = 'schedules.csv'
+        schedule = database.query_table(f"""SELECT * FROM schedule WHERE metadata_id = {simulation_data['metadata_id']}""")
+        schedule = schedule.drop(columns=['metadata_id','timestep',])
+         
+        # simulate
+        try:
+            osm_editor = OpenStudioModelEditor(simulation_data['osm'])
+            schedule.to_csv(schedules_filename,index=False)
+            idf = osm_editor.forward_translate()
+            simulator = Simulator(idd_filepath,idf,simulation_data['epw'],simulation_id=simulation_id,output_directory=output_directory)
+            simulator.simulate()
+        except Exception as e:
+            raise e
+        finally:
+            os.remove(schedules_filename)
+        
+        write_data(simulation_data['osm'],os.path.join(output_directory,f'{simulation_id}.osm'))
+        schedule.to_csv(os.path.join(output_directory,schedules_filename),index=False) # write to output directory
+        LOGGER.info(f'Finished simulation.')
+
+class DOEXStockDatabase(SQLiteDatabase):
+    __ROOT_URL = 'https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/'
+
+    def __init__(self,filepath,overwrite=False,apply_changes=False):
+        super().__init__(filepath)
+        self.__build(overwrite,apply_changes)
+
+    def __build(self,overwrite,apply_changes):
+        schema_filepath = os.path.join(os.path.dirname(__file__),'misc/schema.sql')
+        
+        if os.path.isfile(self.filepath):
+            if overwrite:
+                os.remove(self.filepath)
+            elif not apply_changes:
+                return
+            else:
+                pass
+        else:
+            pass
+
+        self.execute_sql_from_file(schema_filepath)
+
+    def insert_dataset(self,dataset_type,weather_data,year_of_publication,release,filters):
+        dataset = {
+            'dataset_type':dataset_type,
+            'weather_data':weather_data,
+            'year_of_publication':year_of_publication,
+            'release':release
+        }
+        LOGGER.info(f'Updating dataset table.')
+        dataset_id = self.update_dataset_table(dataset)
+        LOGGER.info(f'Updating data_dictionary table.')
+        self.update_data_dictionary_table(dataset,dataset_id)
+        LOGGER.info(f'Updating metadata table.')
+        buildings = self.update_metadata_table(dataset,dataset_id,filters=filters)
+
+        if buildings is not None:
+            LOGGER.info(f'Updating upgrade table.')
+            self.update_upgrade_table(dataset,dataset_id,buildings['upgrade'].unique())
+            LOGGER.info(f'Updating spatial_tract table.')
+            self.update_spatial_tract_table(dataset,dataset_id,buildings)
+            LOGGER.info(f'Updating weather table.')
+            self.update_weather_table(dataset_id,buildings)
+            LOGGER.info(f'Updating timeseries table.')
+            self.update_timeseries_table(dataset,buildings)
+            LOGGER.info(f'Updating model table.')
+            self.update_model_table(dataset,buildings)
+            LOGGER.info(f'Updating schedule table.')
+            self.update_schedule_table(dataset,buildings)
+        else:
+            pass
+        
+    def update_dataset_table(self,dataset):
+        self.insert(
+            'dataset',
+            list(dataset.keys()),
+            [tuple(dataset.values())],
+            on_conflict_fields=list(dataset.keys())
+        )
+        dataset_id = self.query_table(f"""
+            SELECT
+                id
+            FROM dataset
+            WHERE
+                dataset_type = '{dataset['dataset_type']}'
+                AND weather_data = '{dataset['weather_data']}'
+                AND year_of_publication = {dataset['year_of_publication']}
+                AND release = {dataset['release']}
+        """).iloc[0]['id']
+        return dataset_id
+
+    def update_data_dictionary_table(self,dataset,dataset_id):
+        data = DOEXStockDatabase.download_summary_data(DOEXStockDatabase.SummaryType.DATA_DICTIONARY,**dataset)
+        data.columns = [c.replace('.','_').lower() for c in data.columns]
+        data['dataset_id'] = dataset_id
+        self.insert(
+            'data_dictionary',
+            data.columns.tolist(),
+            data.to_records(index=False),
+            ['dataset_id','field_location','field_name']
+        )
+
+    def update_metadata_table(self,dataset,dataset_id,filters=None):
+        data = DOEXStockDatabase.download_summary_data(DOEXStockDatabase.SummaryType.METADATA,**dataset)
+        data = data.reset_index(drop=False)
+
+        if filters is not None:
+            for column, values in filters.items():
+                data = data[data[column].isin(values)].copy()
+        else:
+            pass
+
+        if data.shape[0] > 0:
+            data.columns = [c.replace('.','_').lower() for c in data.columns]
+            data['dataset_id'] = dataset_id
+            self.insert(
+                'metadata',
+                data.columns.tolist(),
+                data.to_records(index=False),
+                ['bldg_id','dataset_id','upgrade']
+            )
+            buildings = self.query_table(f"""
+                SELECT
+                    bldg_id,
+                    id AS metadata_id,
+                    in_county AS county,
+                    upgrade,
+                    in_nhgis_county_gisjoin,
+                    in_nhgis_puma_gisjoin,
+                    in_weather_file_latitude,
+                    in_weather_file_longitude,
+                    in_weather_file_tmy3
+                FROM metadata
+                WHERE
+                    bldg_id IN {tuple(data['bldg_id'].tolist())}
+                    AND upgrade IN {tuple(data['upgrade'].unique().tolist())}
+                    AND dataset_id = {dataset_id}
+            """
+            )
+            LOGGER.info(f'Found {buildings.shape[0]} buildings that match filters.')
+            return buildings
+        else:
+            LOGGER.warning('Did not find any buildings that match filters.')
+            return None
+
+    def update_upgrade_table(self,dataset,dataset_id,upgrade_ids):
+        data = DOEXStockDatabase.download_summary_data(DOEXStockDatabase.SummaryType.UPGRADE_DICTIONARY,**dataset)
+        data['dataset_id'] = dataset_id
+        data.columns = [c.replace('.','_').lower() for c in data.columns]
+        data = data[data['upgrade_id'].isin(upgrade_ids)].copy()
+        
+        if data.shape[0] > 0:
+            self.insert(
+                'upgrade_dictionary',
+                data.columns.tolist(),
+                data.to_records(index=False),
+                ['dataset_id','upgrade_id']
+            )
+        else:
+            pass
+
+    def update_spatial_tract_table(self,dataset,dataset_id,buildings):
+        data = DOEXStockDatabase.download_summary_data(DOEXStockDatabase.SummaryType.SPATIAL_TRACT,**dataset)
+        data['dataset_id'] = dataset_id
+        columns = ['in_nhgis_county_gisjoin','in_nhgis_puma_gisjoin']
+        buildings = buildings.groupby(columns).size()
+        buildings = buildings.reset_index(drop=False)[columns].copy()
+        buildings.columns = [c.replace('in_','') for c in columns]
+        data = pd.merge(data,buildings,on=buildings.columns.tolist(),how='left')
+        data.columns = [c.replace('.','_').lower() for c in data.columns]
+        self.insert(
+            'spatial_tract',
+            data.columns.tolist(),
+            data.to_records(index=False),
+            ['dataset_id','nhgis_tract_gisjoin']
+        )
+
+    def update_weather_table(self,dataset_id,buildings):
+        tmy3 = self.download_energyplus_weather_metadata()
+        tmy3 = tmy3[tmy3['provider']=='TMY3'].copy()
+        tmy3[['longitude','latitude']] = tmy3[['longitude','latitude']].astype(str)
+        tmy3 = tmy3.rename(columns={
+            'longitude':'in_weather_file_longitude',
+            'latitude':'in_weather_file_latitude',
+            'title':'energyplus_title',
+        })
+        buildings = buildings.groupby(
+            ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3']
+        ).size().reset_index().iloc[:,0:-1]
+        buildings = pd.merge(buildings,tmy3,on=['in_weather_file_latitude','in_weather_file_longitude'],how='left')
+        buildings['count'] = 1
+        report = buildings.groupby(
+            ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3']
+        )[['count']].sum().reset_index()
+        locations = report['in_weather_file_tmy3'].unique().tolist()
+        unknown_locations = buildings[buildings['energyplus_title'].isnull()]['in_weather_file_tmy3'].unique().tolist()
+        ambiguous_locations = report[report['count']>1]['in_weather_file_tmy3'].unique().tolist()
+        data = buildings[~buildings['in_weather_file_tmy3'].isin(unknown_locations+ambiguous_locations)].copy()
+        LOGGER.info(f'Found {data.shape[0]}/{len(locations)} weather_file_tmy3.')
+
+        if len(unknown_locations) > 0:
+            LOGGER.warning(f'{len(unknown_locations)}/{len(locations)} weather_file_tmy3 are unknown including {unknown_locations}.')
+        else:
+            pass
+
+        if len(ambiguous_locations) > 0:
+            LOGGER.warning(f'{len(ambiguous_locations)}/{len(locations)} weather_file_tmy3 are ambiguous including {ambiguous_locations}')
+            
+        else:
+            pass
+        
+        if len(buildings) > 0:
+            session = requests.Session()
+            retries = Retry(total=5,backoff_factor=1)
+            session.mount('http://',HTTPAdapter(max_retries=retries))
+            urllib3.disable_warnings()
+            epws = []
+            ddys = []
+            
+            for epw_url, ddy_url in data[['epw_url','ddy_url']].to_records(index=False):
+                response = session.get(epw_url)
+                epws.append(response.content.decode())
+                response = session.get(ddy_url)
+                ddys.append(response.content.decode(encoding='windows-1252'))
+            
+            data = data[[
+                'in_weather_file_latitude',
+                'in_weather_file_longitude',
+                'in_weather_file_tmy3',
+                'energyplus_title',
+                'epw_url',
+                'ddy_url'
+            ]].copy()
+            data['epw'] = epws
+            data['ddy'] = ddys
+            data['dataset_id'] = dataset_id
+            data.columns = [c.replace('.','_').replace('in_','').lower() for c in data.columns]
+            self.insert(
+                'weather',
+                data.columns.tolist(),
+                data.to_records(index=False),
+                ['dataset_id','weather_file_tmy3','weather_file_latitude','weather_file_longitude']
+            )
+
+        else:
+            pass
+        
+    def update_timeseries_table(self,dataset,buildings):
+        buildings = buildings[['bldg_id','metadata_id','county','upgrade']].to_records(index=False)
+        dataset_url = DOEXStockDatabase.__get_dataset_url(**dataset)
+
+        for i, (bldg_id, metadata_id, county, upgrade) in enumerate(buildings):
+            LOGGER.debug(f'Downloading timeseries ({i+1}/{buildings.shape[0]}): bldg_id: {bldg_id}, upgrade: {upgrade}.')
+            building_path = f'timeseries_individual_buildings/by_county/upgrade={upgrade}/county={county}/{bldg_id}-{upgrade}.parquet'
+            url = os.path.join(dataset_url,building_path)
+            data = pd.read_parquet(url)
+            data = data.reset_index(drop=False)
+            data.columns = [c.replace('.','_').lower() for c in data.columns]
+            data['metadata_id'] = metadata_id
+            self.insert(
+                'timeseries',
+                data.columns.tolist(),
+                data.to_records(index=False),
+                ['metadata_id','timestamp']
+            )
+
+    def update_model_table(self,dataset,buildings):
+        buildings = buildings[['bldg_id','metadata_id','upgrade']].to_records(index=False)
+        dataset_url = DOEXStockDatabase.__get_dataset_url(**dataset)
+        values = []
+
+        for i, (bldg_id,metadata_id,upgrade) in enumerate(buildings):
+            LOGGER.debug(f'Downloading model ({i+1}/{buildings.shape[0]}): bldg_id: {bldg_id}, upgrade: {upgrade}.')
+            building_path = f'building_energy_models/bldg{bldg_id:07d}-up{upgrade:02d}.osm.gz'
+            url = os.path.join(dataset_url,building_path)
+            response = requests.get(url)
+            compressed_file = io.BytesIO(response.content)
+            decompressed_file = gzip.GzipFile(fileobj=compressed_file,mode='rb')
+            osm = decompressed_file.read().decode()
+            values.append((metadata_id,osm))
+        
+        self.insert(
+            'model',
+            ['metadata_id','osm'],
+            values,
+            on_conflict_fields=['metadata_id']
+        )
+
+    def update_schedule_table(self,dataset,buildings):
+        buildings = buildings[['bldg_id','metadata_id','upgrade']].to_records(index=False)
+        dataset_url = DOEXStockDatabase.__get_dataset_url(**dataset)
+
+        for i, (bldg_id,metadata_id,upgrade) in enumerate(buildings):
+            LOGGER.debug(f'Downloading schedule ({i+1}/{buildings.shape[0]}): bldg_id: {bldg_id}, upgrade: {upgrade}.')
+            building_path = f'occupancy_schedules/bldg{bldg_id:07d}-up{upgrade:02d}.csv.gz'
+            url = os.path.join(dataset_url,building_path)
+            data = pd.read_csv(url)
+            data['metadata_id'] = metadata_id
+            data['timestep'] = data.index
+            self.insert(
+                'schedule',
+                data.columns.tolist(),
+                data.to_records(index=False),
+                on_conflict_fields=['metadata_id','timestep']
+            )
+
+    @classmethod
+    def download_summary_data(cls,summary_type,dataset_type,weather_data,year_of_publication,release):
+        downloader = {
+            DOEXStockDatabase.SummaryType.METADATA.name:{
+                'url':'metadata/metadata.parquet',
+                'reader':pd.read_parquet,
+                'reader_kwargs':{}
+            },
+            DOEXStockDatabase.SummaryType.DATA_DICTIONARY.name:{
+                'url':'data_dictionary.tsv',
+                'reader':pd.read_csv,
+                'reader_kwargs':{'sep':'\t'}
+            },
+            DOEXStockDatabase.SummaryType.ENUMERATION_DICTIONARY.name:{
+                'url':'enumeration_dictionary.tsv',
+                'reader':pd.read_csv,
+                'reader_kwargs':{'sep':'\t'}
+            },
+            DOEXStockDatabase.SummaryType.UPGRADE_DICTIONARY.name:{
+                'url':'upgrade_dictionary.tsv',
+                'reader':pd.read_csv,
+                'reader_kwargs':{'sep':'\t'}
+            },
+            DOEXStockDatabase.SummaryType.SPATIAL_TRACT.name:{
+                'url':'geographic_information/spatial_tract_lookup_table.csv',
+                'reader':pd.read_csv,
+                'reader_kwargs':{'sep':','}
+            },
+        }[summary_type]
+        dataset_url = cls.__get_dataset_url(dataset_type,weather_data,year_of_publication,release)
+        data = downloader['reader'](dataset_url,**downloader['reader_kwargs'])
+        return data
+
+    @classmethod
+    def __get_dataset_url(cls,dataset_type,weather_data,year_of_publication,release):
+        dataset_path = f'{year_of_publication}/{dataset_type}_{weather_data}_release_{release}/'
+        return os.path.join(DOEXStockDatabase.__ROOT_URL,dataset_path)
+
+    @classmethod
+    def download_energyplus_weather_metadata(cls):
+        url = 'https://raw.githubusercontent.com/NREL/EnergyPlus/develop/weather/master.geojson'
+        response = requests.get(url)
+        response = response.json()
+        features = response['features']
+        records = []
+
+        for feature in features:
+            title = feature['properties']['title']
+            epw_url = BeautifulSoup(feature['properties']['epw'],'html.parser').find('a')['href']
+            ddy_url = BeautifulSoup(feature['properties']['ddy'],'html.parser').find('a')['href']
+            longitude, latitude = tuple(feature['geometry']['coordinates'])
+            region = epw_url.split('/')[3]
+            country = epw_url.split('/')[4]
+            state = epw_url.split('/')[5]
+            station_id = title.split('.')[-1].split('_')[0]
+            provider = title.split('.')[-1].split('_')[-1]
+
+            records.append({
+                'title':title,
+                'region':region,
+                'country':country,
+                'state':state,
+                'station_id':station_id,
+                'provider':provider,
+                'epw_url':epw_url,
+                'ddy_url':ddy_url,
+                'longitude':longitude,
+                'latitude':latitude,
+            })
+
+        data = pd.DataFrame(records)
+        return data
+
+    class SummaryType(Enum):
+        METADATA = 'metadata'
+        DATA_DICTIONARY = 'data_dictionary'
+        ENUMERATION_DICTIONARY = 'enumaration_dictionary'
+        UPGRADE_DICTIONARY = 'upgrade_dictionary'
+        SPATIAL_TRACT = 'spatial_tract'

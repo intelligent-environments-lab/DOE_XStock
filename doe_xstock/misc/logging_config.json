@@ -1,0 +1,31 @@
+{
+    "version": 1,
+    "formatters": {
+        "detailed": {
+            "class": "logging.Formatter",
+            "format": "%(levelname)s - %(asctime)s - %(name)s - %(process)d: %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "detailed"
+        },
+        "file": {
+            "class": "logging.FileHandler",
+            "filename": "doe_xstock.log",
+            "mode": "a",
+            "formatter": "detailed"
+        }
+    },
+    "loggers": {
+        "main": {
+            "level": "WARNING",
+            "handlers": ["console"]
+        },
+        "doe_xstock": {
+            "level": "DEBUG",
+            "handlers": ["file"]
+        }
+    }
+}
