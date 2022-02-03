@@ -70,19 +70,24 @@ database = DOEXStockDatabase(database_filepath)
 schema = database.get_schema()
 ```
 
-Inserted data can then be queried using SQL and is returned as a `pd.DataFrame` object. An example is given using the `metadata` table:
+Inserted data can then be queried using SQL and is returned as a `pd.DataFrame` object. An entire table can also be retrieved by just supplying table name. An example is given using the `metadata` table:
 
 ```python
 from doe_xstock.doe_xstock import DOEXStockDatabase
 
 database_filepath = 'doe_xstock.db'
 database = DOEXStockDatabase(database_filepath)
+
+# query table
 metadata = database.query_table("""
     SELECT
         *
     FROM metadata
     WHERE in_geometry_building_type_recs = 'Single-Family Detached'
 """)
+
+# get full table
+metadata = database.get_table('metadata')
 ```
 
 Finally, EnergyPlus simulation can be run using downloaded building data. An example workflow is given below:
