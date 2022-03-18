@@ -1,6 +1,5 @@
 {
     "in.geometry_building_type_recs":["Single-Family Detached"],
     "in.vacancy_status":["Occupied"],
-    "in.resstock_county_id":["TX, Travis County"],
-    "bldg_id":[40]
+    "in.resstock_county_id":["TX, Travis County"]
 }
