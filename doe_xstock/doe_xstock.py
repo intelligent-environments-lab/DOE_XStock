@@ -406,8 +406,9 @@ class DOEXStockDatabase(SQLiteDatabase):
                 'reader':pd.read_csv,
                 'reader_kwargs':{'sep':','}
             },
-        }[summary_type]
+        }[summary_type.name]
         dataset_url = cls.__get_dataset_url(dataset_type,weather_data,year_of_publication,release)
+        dataset_url = os.path.join(dataset_url,downloader['url'])
         data = downloader['reader'](dataset_url,**downloader['reader_kwargs'])
         return data
 
