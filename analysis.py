@@ -247,9 +247,9 @@ SCHEDULE_DATA_FILEPATHS = [f for f in SCHEDULE_DATA_FILEPATHS if not schedule_na
 
 # DATA MANIPULATION ****************************************************************
 '''DESCRIPTION:
- Once that has been done, the data is melted to longform and SAX transformation is applied to a sequence size equalling 
-the number of principal components. While we are aware that some schedules don't even show variance day-of-week wise, this approach is more 
-generalizable when analyzing data from other locations.'''
+ SAX transformation of the schedule time series using a window size of SAX_W for PAA and alphabet size of SAX_A for time series to word conversion.
+ The idea is that SAX compresses the data to discrete words describing the scehdule profiles that can be aggregated by counts of unique words per building 
+ and used as clustering dataset. Essentially this reduces the width of the clustering data from the length of the time series to the number of unique words.'''
 
 def manipulate():
     # set data
@@ -368,10 +368,11 @@ def manipulate():
 # manipulate()
 
 '''NOTE:
-- The PCA transformation on the daily profile hourly variables shows that fewer than 24 components are able to
-explain the variance in the schedules in most cases and in some cases, just 1 component is needed.
-- PCA also reveals what was seen in the box plots that the variance occurs mostly during the day as early hours of the
-day have weak correlation with the top components.
+- The schedules with wide variance e.g. appliance loads have about 16 unique words. 
+    Occupancy and some others have the larger number of unique words but still under 100 which is much less than using the entire timeseries as a clsuter datapoint.
+    Maybe, PCA can be applied as a second compression to further reduce the dimensionality?
+- The heat map that shows the normalized word counts per building shows variance across the building which is a good sign that the clusterin might pick out building groups
+    (fingers crossed!).
 '''
 # END
 
