@@ -8,7 +8,7 @@ from saxpy.paa import paa
 from saxpy.sax import ts_to_string
 import seaborn as sns
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, minmax_scale
 
 '''OBJECTIVE: 
 The objective is to identify building energy use diversity in the RESSTOCK dataset in a data-driven way to help with developing 
@@ -269,10 +269,103 @@ def manipulate():
         print(f'{schedule_name(filepath)} unique count:',len(plot_data['sax_word'].unique()))
 
     # plot
+    row_count = len(SCHEDULE_DATA_FILEPATHS)
+    column_count = 1
     # collective word frequency
+    fig, _ = plt.subplots(row_count,column_count,figsize=(18,2.5*row_count))
     
+    for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_pickle(os.path.join(SCHEDULE_SAX_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        plot_data = plot_data.groupby(['sax_word']).size().reset_index(name='count')
+        plot_data = plot_data.sort_values('count',ascending=False)
+        y = plot_data['count']
+        x = list(range(len(y)))
+        ax.bar(x,y)
+        ax.set_xticks(x)
+        ax.set_xticklabels(plot_data['sax_word'].tolist())
+        ax.tick_params('x',which='both',rotation=90)
+        ax.set_ylabel('Count')
+        ax.set_xlabel('Word')
+        ax.set_title(schedule_name(filepath))
 
-manipulate()
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_sax_word_frequency_count_bar_graph.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+    # word frequency w.r.t. temporal features heatmap
+    for classification in ['day_of_week','month']:
+        fig, ax = plt.subplots(row_count,column_count,figsize=(18,6*row_count))
+
+        for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+            print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+            plot_data = pd.read_pickle(os.path.join(SCHEDULE_SAX_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+            plot_data = pd.merge(plot_data,DATE_RANGE,on='date',how='left')
+            plot_data = plot_data.groupby(['sax_word',classification]).size().reset_index(name='count')
+            plot_data = plot_data.pivot(index='sax_word',columns=classification,values='count')
+            plot_data = plot_data.sort_values(plot_data.columns.tolist(),ascending=False)
+            plot_data = plot_data.fillna(0)
+            plot_data = plot_data.T
+            x, y, z = plot_data.columns.tolist(), plot_data.index, plot_data.values
+            divnorm = colors.TwoSlopeNorm(vcenter=0)
+            _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap='coolwarm',edgecolors='white',linewidth=0.5)
+            _ = fig.colorbar(cm.ScalarMappable(cmap='coolwarm',norm=divnorm),ax=ax,orientation='vertical',label='Count',fraction=0.025,pad=0.01)
+            ax.tick_params('x',which='both',rotation=90)
+            ax.set_ylabel(classification)
+            ax.set_xlabel('Word')
+            ax.set_title(schedule_name(filepath))
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_sax_word_{classification}_frequency_count_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.close()
+
+    # word occurence heatmpa across building to pick out groups of buildings on a temporal scale
+    fig, ax = plt.subplots(row_count,column_count,figsize=(18,25*row_count))
+
+    for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_pickle(os.path.join(SCHEDULE_SAX_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        words = plot_data.groupby(['sax_word']).size().reset_index()[['sax_word']].copy()
+        words['word_id'] = words.index + 1
+        plot_data = pd.merge(plot_data,words,on='sax_word',how='left')
+        plot_data = plot_data.pivot(index='metadata_id',columns='date',values='word_id')
+        plot_data = plot_data.sort_values(plot_data.columns.tolist(),ascending=False).reset_index(drop=True)
+        x, y, z = plot_data.columns.tolist(), plot_data.index.tolist(), plot_data.values
+        divnorm = colors.TwoSlopeNorm(vcenter=0)
+        _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap='coolwarm',edgecolors='white',linewidth=0.5)
+        _ = fig.colorbar(cm.ScalarMappable(cmap='coolwarm',norm=divnorm),ax=ax,orientation='vertical',label='Word ID',fraction=0.025,pad=0.01)
+        ax.tick_params('x',which='both',rotation=90)
+        ax.set_ylabel('Building')
+        ax.set_xlabel('Timestep')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(schedule_name(filepath))
+
+    # word count per building heatmap becasue it's what we want to cluster init so why not!
+    fig, ax = plt.subplots(row_count,column_count,figsize=(18,25*row_count))
+
+    for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_pickle(os.path.join(SCHEDULE_SAX_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        plot_data = plot_data.groupby(['metadata_id','sax_word']).size().reset_index(name='count')
+        plot_data = plot_data.pivot(index='metadata_id',columns='sax_word',values='count')
+        plot_data = plot_data.sort_values(plot_data.columns.tolist(),ascending=False).reset_index(drop=True)
+        x, y, z = plot_data.columns.tolist(), plot_data.index.tolist(), plot_data.values
+        z = minmax_scale(z)
+        divnorm = colors.TwoSlopeNorm(vcenter=0)
+        _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap='coolwarm',edgecolors='white',linewidth=0.5)
+        _ = fig.colorbar(cm.ScalarMappable(cmap='coolwarm',norm=divnorm),ax=ax,orientation='vertical',label='Count (Normalized)',fraction=0.025,pad=0.01)
+        ax.tick_params('x',which='both',rotation=90)
+        ax.set_ylabel('Building')
+        ax.set_xlabel('Word')
+        ax.set_yticks([])
+        ax.set_title(schedule_name(filepath))
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_sax_word_norm_count_building_heatmap.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+# manipulate()
 
 '''NOTE:
 - The PCA transformation on the daily profile hourly variables shows that fewer than 24 components are able to
