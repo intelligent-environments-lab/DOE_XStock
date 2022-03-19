@@ -9,6 +9,7 @@ from saxpy.sax import ts_to_string
 import seaborn as sns
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, minmax_scale
+from doe_xstock.utilities import read_json, write_json
 
 '''OBJECTIVE: 
 The objective is to identify building energy use diversity in the RESSTOCK dataset in a data-driven way to help with developing 
@@ -43,7 +44,7 @@ SEASONS = {
     6:'summer',7:'summer',8:'summer',
     9:'fall',10:'fall',11:'fall',
 }
-PCA_CUMMULATIVE_VARIANCE_THRESHOLD = 0.9
+PCA_CUMMULATIVE_VARIANCE_THRESHOLD = 0.95
 SAX_A = 3
 SAX_W = 4
 DATE_RANGE = pd.DataFrame({'timestamp':pd.date_range('2017-01-01','2017-12-31 23:00:00', freq='H')})
@@ -349,6 +350,7 @@ def manipulate():
         plot_data = pd.read_pickle(os.path.join(SCHEDULE_SAX_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
         plot_data = plot_data.groupby(['metadata_id','sax_word']).size().reset_index(name='count')
         plot_data = plot_data.pivot(index='metadata_id',columns='sax_word',values='count')
+        plot_data = plot_data.fillna(0)
         plot_data = plot_data.sort_values(plot_data.columns.tolist(),ascending=False).reset_index(drop=True)
         x, y, z = plot_data.columns.tolist(), plot_data.index.tolist(), plot_data.values
         z = minmax_scale(z)
@@ -373,6 +375,143 @@ def manipulate():
     Maybe, PCA can be applied as a second compression to further reduce the dimensionality?
 - The heat map that shows the normalized word counts per building shows variance across the building which is a good sign that the clusterin might pick out building groups
     (fingers crossed!).
+'''
+# END
+
+# DATA MANIPULATION ****************************************************************
+'''DESCRIPTION:
+ Perform PCA transformation on the per building unqiue word counts data set to reduce the feature space of
+ those schedules that are large and extract the variables that best represent the variance in the word counts.
+ The features are used in the clustering analysis to extract the different building classes.'''
+ 
+def manipulate():
+    explained_variance_ratio_data = {}
+
+    for i, filepath in enumerate(SCHEDULE_DATA_FILEPATHS):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_pickle(os.path.join(SCHEDULE_SAX_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        plot_data = plot_data.groupby(['metadata_id','sax_word']).size().reset_index(name='count')
+        plot_data = plot_data.pivot(index='metadata_id',columns='sax_word',values='count')
+        plot_data = plot_data.fillna(0)
+        scaler = StandardScaler()
+        x = plot_data.values
+        scaler = scaler.fit(x)
+        x = scaler.transform(x)
+        pca = PCA(n_components=None)
+        pca.fit(x)
+        explained_variance_ratio_data[schedule_name(filepath)] = list(pca.explained_variance_ratio_)
+        component_data = pd.DataFrame(pca.transform(x), columns=range(0,plot_data.shape[1]))
+        index_data = plot_data.reset_index(drop=False)[['metadata_id']].copy()
+        index_data = pd.concat([index_data,component_data],axis=1)
+        index_data.to_pickle(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        component_data.columns = [str(c) for c in component_data.columns]
+        keys = plot_data.columns.tolist()
+        plot_data = pd.concat([plot_data.reset_index(drop=False),component_data],axis=1)
+        plot_data = plot_data.corr('pearson')
+        plot_data = plot_data.loc[component_data.columns.tolist()][keys].copy()
+        plot_data = plot_data.reset_index(drop=True)
+        plot_data['component'] = plot_data.index
+        plot_data.to_csv(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'{schedule_name(filepath)}_correlation.csv'),index=False)
+    
+    write_json(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'explained_variance_ratio.json'),explained_variance_ratio_data)
+    explained_variance_ratio_data = read_json(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'explained_variance_ratio.json'))
+
+    # plots
+    # components per schedule
+    _, ax = plt.subplots(1,1,figsize=(4,8))
+    y1 = [threshold_satisfaction_index(v) + 1 for _, v in explained_variance_ratio_data.items()]
+    y2 = [len(v) for _, v in explained_variance_ratio_data.items()]
+    x = list(range(len(y1)))
+    ax.barh(x,y1,color=['blue'],label=f'{PCA_CUMMULATIVE_VARIANCE_THRESHOLD*100}%')
+    ax.barh(x,y2,color=['blue'],alpha=0.2,label=f'100%')
+    ax.set_yticks(x)
+    ax.set_yticklabels(list(explained_variance_ratio_data.keys()))
+    ax.legend(title='Explained variance')
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_hourly_schedule_pca_threshold_satisfaction_components.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+    # explained variance ratio
+    row_count = len(SCHEDULE_DATA_FILEPATHS)
+    column_count = 1
+    fig, _ = plt.subplots(row_count, column_count, figsize=(18,2.5*row_count))
+
+    for i, (ax, (column, y2)) in enumerate(zip(fig.axes, explained_variance_ratio_data.items())):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        y1 = [sum(y2[0:i]) for i in range(len(y2))]
+        x = list(range(0,len(y1)))
+        ax.bar(x,y1,color='grey',label='Previous Sum')
+        ax.bar(x,y2,bottom=y1,color='blue',label='Current')
+        ax.axhline(PCA_CUMMULATIVE_VARIANCE_THRESHOLD,color='red',linestyle='--',label='Threshold')
+        index = threshold_satisfaction_index(y2) + 0.5
+        ax.axvline(index,color='red',linestyle='--',)
+        ax.set_ylabel('Cummulative explained\nvariance ratio')
+        ax.set_xlabel('Component')
+        ax.set_xticks(x)
+        ax.set_xticklabels(x)
+        ax.set_title(column)
+        ax.legend()
+
+    plt.tight_layout()
+    fig.align_ylabels()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_hourly_schedule_pca_explained_variance_ratio.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+    # distribution of components
+    fig, _ = plt.subplots(row_count, column_count, figsize=(18,2.5*row_count))
+
+    for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_pickle(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        variance_ratio_data = explained_variance_ratio_data[schedule_name(filepath)]
+        index = threshold_satisfaction_index(variance_ratio_data) + 1.5
+        columns = list(range(0,len(variance_ratio_data)))
+        ax.boxplot(plot_data[columns].values)
+        ax.set_ylabel('Value')
+        ax.set_xlabel('Component')
+        ax.axvline(index, color='red', linestyle='--')
+        ax.set_title(schedule_name(filepath))
+
+    plt.tight_layout()
+    fig.align_ylabels()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_hourly_schedule_pca_component_distribution.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+    # correlation
+    fig, ax = plt.subplots(row_count,column_count,figsize=(12,12*row_count))
+
+    for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_csv(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'{schedule_name(filepath)}_correlation.csv'))
+        plot_data = plot_data.set_index('component')
+        x, y, z = plot_data.columns.tolist(), plot_data.index, plot_data.values
+        divnorm = colors.TwoSlopeNorm(vcenter=0,vmin=-1,vmax=1)
+        _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap='coolwarm',edgecolors='white',linewidth=0.5)
+        explained_variance_data = explained_variance_ratio_data[schedule_name(filepath)]
+        ax.axhline(threshold_satisfaction_index(explained_variance_data) + 0.5,color='red',linestyle='--')
+
+        for k in range(len(y)):
+            for j in range(len(x)):
+                value = z[k,j]
+                value = round(value,2) if abs(value) >= 0.4 else None
+                _ = ax.text(j,k,value,ha='center',va='center',color='black')
+
+        _ = fig.colorbar(cm.ScalarMappable(cmap='coolwarm',norm=divnorm),ax=ax,orientation='vertical',label=None,fraction=0.025,pad=0.01)
+        ax.tick_params('x',which='both',rotation=90)
+        ax.set_ylabel('Component')
+        ax.set_xlabel('Hour')
+        ax.set_xticks(x)
+        ax.set_yticks(y)
+        ax.set_title(schedule_name(filepath))
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_hourly_schedule_pca_correlation_heatmap.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+manipulate()
+
+'''NOTE:
+- Able to reduce the schedules with over 60 words to about 50 words when 95% of variance is desired from PCA components.
+- In general all schedules could use lower dimension than discovered in SAX to explain variance and use as clustering dataset.
 '''
 # END
 
