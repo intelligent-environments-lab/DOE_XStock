@@ -1,13 +1,19 @@
+import concurrent.futures
 import os
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
 from matplotlib import cm
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import numpy as np
 import pandas as pd
 from saxpy.alphabet import cuts_for_asize
 from saxpy.paa import paa
 from saxpy.sax import ts_to_string
 import seaborn as sns
+from sklearn.cluster import DBSCAN, KMeans
 from sklearn.decomposition import PCA
+from sklearn.metrics import calinski_harabasz_score, silhouette_score
+from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler, minmax_scale
 from doe_xstock.utilities import read_json, write_json
 
@@ -36,6 +42,7 @@ FIGURES_DIRECTORY = 'figures/'
 SCHEDULE_DATA_DIRECTORY = '../schedule_data'
 SCHEDULE_PCA_DATA_DIRECTORY = '../schedule_pca_data'
 SCHEDULE_SAX_DATA_DIRECTORY = '../schedule_sax_data'
+SCHEDULE_CLUSTER_DATA_DIRECTORY = '../schedule_cluster_data'
 SCHEDULE_DATA_FILEPATHS = [os.path.join(SCHEDULE_DATA_DIRECTORY,f) for f in os.listdir(SCHEDULE_DATA_DIRECTORY) if f.endswith('.pkl')]
 SCHEDULE_DATA_FILEPATHS = sorted(SCHEDULE_DATA_FILEPATHS)
 SEASONS = {
@@ -342,6 +349,10 @@ def manipulate():
         ax.set_yticks([])
         ax.set_title(schedule_name(filepath))
 
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_sax_word_norm_count_building_timeseries_heatmap.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
     # word count per building heatmap becasue it's what we want to cluster init so why not!
     fig, ax = plt.subplots(row_count,column_count,figsize=(18,25*row_count))
 
@@ -398,7 +409,7 @@ def manipulate():
         scaler = scaler.fit(x)
         x = scaler.transform(x)
         pca = PCA(n_components=None)
-        pca.fit(x)
+        pca = pca.fit(x)
         explained_variance_ratio_data[schedule_name(filepath)] = list(pca.explained_variance_ratio_)
         component_data = pd.DataFrame(pca.transform(x), columns=range(0,plot_data.shape[1]))
         index_data = plot_data.reset_index(drop=False)[['metadata_id']].copy()
@@ -507,10 +518,278 @@ def manipulate():
     plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_hourly_schedule_pca_correlation_heatmap.png'), facecolor='white', bbox_inches='tight')
     plt.close()
 
-manipulate()
+# manipulate()
 
 '''NOTE:
 - Able to reduce the schedules with over 60 words to about 50 words when 95% of variance is desired from PCA components.
 - In general all schedules could use lower dimension than discovered in SAX to explain variance and use as clustering dataset.
+'''
+# END
+
+# DATA MANIPULATION ****************************************************************
+'''DESCRIPTION:
+ Perform clustering on the PCA components extracted from SAX dataset to identify characteristic schedules.'''
+
+def manipulate():
+    # explained_variance_ratio_data = read_json(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'explained_variance_ratio.json'))
+
+    # # prep cluster data
+    # for i, filepath in enumerate(SCHEDULE_DATA_FILEPATHS):
+    #     print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+    #     plot_data = pd.read_pickle(os.path.join(SCHEDULE_PCA_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+    #     variance_ratio_data = explained_variance_ratio_data[schedule_name(filepath)]
+    #     index = threshold_satisfaction_index(variance_ratio_data)
+    #     pca_columns = list(range(0,index + 1))
+    #     plot_data = plot_data[['metadata_id'] + pca_columns].copy()
+    #     plot_data = plot_data.set_index('metadata_id').sort_index()
+        
+    #     # # normalize before clustering
+    #     # scaler = StandardScaler()
+    #     # scaler = scaler.fit(plot_data.values)
+    #     # plot_data[pca_columns] = scaler.transform(plot_data.values)
+    #     # # plot_data[pca_columns] = minmax_scale(plot_data.values)
+        
+    #     # save cluster dataset
+    #     plot_data.to_pickle(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+
+    # # KMeans fitting  
+    # with concurrent.futures.ThreadPoolExecutor() as executor:
+    #     kmeans_result = {'n_clusters':list(range(2,101)),'schedules': {}}
+    #     work_order = [[],kmeans_result['n_clusters']*len(SCHEDULE_DATA_FILEPATHS)]
+
+    #     for f in SCHEDULE_DATA_FILEPATHS:
+    #         work_order[0] += [f]*len(kmeans_result['n_clusters'])
+    #         kmeans_result['schedules'][schedule_name(f)] = {'scores':{'sse':[],'calinski_harabasz':[],'silhouette':[]},'labels':[]}
+    #         results = executor.map(fit_kmeans,*work_order)
+
+    #     for r in results:
+    #         print('finished fitting schedule:',r[0],'n_clusters:',r[1])
+    #         kmeans_result['schedules'][r[0]]['labels'].append(r[2])
+    #         kmeans_result['schedules'][r[0]]['scores']['sse'].append(r[3]['sse'])
+    #         kmeans_result['schedules'][r[0]]['scores']['calinski_harabasz'].append(r[3]['calinski_harabasz'])
+    #         kmeans_result['schedules'][r[0]]['scores']['silhouette'].append(r[3]['silhouette'])
+    
+    #     write_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'kmeans_result_without_norm.json'),kmeans_result)
+
+    # # DBSCAN
+    # # Use KNN to determine eps
+    # with concurrent.futures.ThreadPoolExecutor() as executor:
+    #     knn_result = {'n_neighbors':2,'schedules':{}}
+    #     work_order = [SCHEDULE_DATA_FILEPATHS,[knn_result['n_neighbors']]*len(SCHEDULE_DATA_FILEPATHS)]
+    #     results = executor.map(fit_knn,*work_order)
+
+    #     for r in results:
+    #         print('finished fitting schedule:',r[0])
+    #         knn_result['schedules'][r[0]] = {}
+    #         knn_result['schedules'][r[0]]['distance'] = r[1]
+       
+    #     write_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json'),knn_result)
+
+    # # Now apply DBSCAN
+    # with concurrent.futures.ThreadPoolExecutor() as executor:
+    #     dbscan_eps = read_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'dbscan_eps.json'))
+    #     work_order = [[],[]]
+    #     dbscan_result = {'schedules':{}}
+    #     step = 0.1
+
+    #     for filepath in dbscan_eps:
+    #         eps = dbscan_eps[filepath]
+    #         distance = read_json(
+    #             os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json')
+    #         )['schedules'][schedule_name(filepath)]['distance']
+    #         mini, maxi = max(round(min(distance),1),step), round(max(distance),1)
+    #         eps = np.arange(mini,maxi,step).tolist()
+    #         work_order[1] += eps
+    #         work_order[0] += [filepath]*len(eps)
+    #         dbscan_result['schedules'][schedule_name(filepath)] = {
+    #             'eps':[],
+    #             'min_samples':[],
+    #             'scores':{'sse':[],'calinski_harabasz':[],'silhouette':[]},
+    #             'labels':[]
+    #         }
+    
+    #     results = executor.map(fit_dbscan,*work_order)
+
+    #     for r in results:
+    #         if r[3] is None:
+    #             print('UNSUCCESSFUL fitting schedule:',r[0],'eps:',r[1],'min_samples:',r[2])
+    #         else:
+    #             print('finished fitting schedule:',r[0],'eps:',r[1],'min_samples:',r[2])
+    #             dbscan_result['schedules'][r[0]]['eps'].append(r[1])
+    #             dbscan_result['schedules'][r[0]]['min_samples'].append(r[2])
+    #             dbscan_result['schedules'][r[0]]['min_samples'].append(r[2])
+    #             dbscan_result['schedules'][r[0]]['labels'].append(r[3])
+    #             dbscan_result['schedules'][r[0]]['scores']['sse'].append(r[4]['sse'])
+    #             dbscan_result['schedules'][r[0]]['scores']['calinski_harabasz'].append(r[4]['calinski_harabasz'])
+    #             dbscan_result['schedules'][r[0]]['scores']['silhouette'].append(r[4]['silhouette'])
+            
+    #     write_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'dbscan_result.json'),dbscan_result)
+        
+    # # plot
+    kmeans_result = read_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'kmeans_result_without_norm.json'))
+    knn_result = read_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json'))
+    dbscan_result = read_json(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'dbscan_result.json'))
+
+    # # cluster dataset
+    # row_count = len(SCHEDULE_DATA_FILEPATHS)
+    # column_count = 1
+    # fig, ax = plt.subplots(row_count,column_count,figsize=(18,25*row_count))
+
+    # for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+    #     print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+    #     plot_data = pd.read_pickle(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+
+    #     plot_data = plot_data.sort_values(plot_data.columns.tolist(),ascending=False).reset_index(drop=True)
+    #     x, y, z = plot_data.columns.tolist(), plot_data.index.tolist(), plot_data.values
+    #     divnorm = colors.TwoSlopeNorm(vcenter=0)
+    #     _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap='coolwarm',edgecolors='white',linewidth=0.5)
+    #     _ = fig.colorbar(cm.ScalarMappable(cmap='coolwarm',norm=divnorm),ax=ax,orientation='vertical',label='Count (Normalized)',fraction=0.025,pad=0.01)
+    #     ax.tick_params('x',which='both',rotation=90)
+    #     ax.set_ylabel('Building')
+    #     ax.set_xlabel('PCA Component')
+    #     ax.set_yticks([])
+    #     ax.set_title(schedule_name(filepath))
+
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_pca_cluster_dataset_building_heatmap.png'), facecolor='white', bbox_inches='tight')
+    # plt.close()
+
+    # # KMeans scores
+    # row_count = len(SCHEDULE_DATA_FILEPATHS)
+    # column_count = len(list(kmeans_result['schedules'].values())[0]['scores'])
+    # fig, axs = plt.subplots(row_count, column_count, figsize=(5*column_count,2*row_count))
+    # x = kmeans_result['n_clusters']
+
+    # for i, (schedule, schedule_data) in enumerate(kmeans_result['schedules'].items()):
+    #     for j, (score, y) in enumerate(schedule_data['scores'].items()):
+    #         axs[i,j].plot(x,y)
+    #         axs[i,j].set_title(f'{schedule}')
+    #         axs[i,j].set_xlabel('n_clusters')
+    #         axs[i,j].set_ylabel(score)
+
+    # # DBSCAN  scores
+    # row_count = len(SCHEDULE_DATA_FILEPATHS)
+    # column_count = len(list(dbscan_result['schedules'].values())[0]['scores'])
+    # fig, axs = plt.subplots(row_count, column_count, figsize=(5*column_count,2*row_count))
+
+    # for i, (schedule, schedule_data) in enumerate(dbscan_result['schedules'].items()):
+    #     x = schedule_data['eps']
+    #     y2 = [len(set(l)) for l in schedule_data['labels']]
+
+    #     for j, (score, y1) in enumerate(schedule_data['scores'].items()):
+    #         axs[i,j].plot(x,y1,color='blue')
+    #         axs[i,j].set_title(f'{schedule}')
+    #         axs[i,j].set_xlabel('eps')
+    #         axs[i,j].set_ylabel(score,color='blue')
+    #         ax2 = axs[i,j].twinx()
+    #         ax2.plot(x,y2,color='red')
+    #         ax2.set_ylabel('clusters',color='red')
+    
+    # plt.tight_layout()
+    # fig.align_ylabels()
+    # plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_hourly_schedule_dbscan_scores.png'), facecolor='white', bbox_inches='tight')
+    # plt.close()
+
+    # DBSCAN label against timeseries
+    row_count = len(SCHEDULE_DATA_FILEPATHS)
+    column_count = 1
+    fig, ax = plt.subplots(row_count,column_count,figsize=(8,8*row_count))
+
+    for i, (ax, filepath) in enumerate(zip(fig.axes, SCHEDULE_DATA_FILEPATHS)):
+        print(f'{i+1}/{len(SCHEDULE_DATA_FILEPATHS)}')
+        plot_data = pd.read_pickle(os.path.join(SCHEDULE_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl'))
+        plot_data = plot_data.pivot(index='metadata_id',columns='timestep',values=schedule_name(filepath))
+        scores = dbscan_result['schedules'][schedule_name(filepath)]['scores']['calinski_harabasz']
+        max_score_index = scores.index(max(scores))
+        labels = dbscan_result['schedules'][schedule_name(filepath)]['labels'][max_score_index]
+        columns = plot_data.columns.tolist()
+        plot_data['label'] = labels
+        plot_data = plot_data.sort_values(['label']+columns).reset_index(drop=True)
+        indices = plot_data.groupby(['label']).size().reset_index(name='count')['count'].tolist()
+        indices = [sum(indices[0:i + 1]) for i in range(len(indices))]
+        plot_data = plot_data.drop(columns=['label'])
+        x, y, z = plot_data.columns.tolist(), plot_data.index, plot_data.values
+        divnorm = colors.TwoSlopeNorm(vcenter=0)
+        _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap='coolwarm',edgecolors='white',linewidth=0,clip_on=False)
+        _ = fig.colorbar(cm.ScalarMappable(cmap='coolwarm',norm=divnorm),ax=ax,orientation='vertical',label=None,fraction=0.025,pad=0.01)
+
+        for label, index in zip(sorted(set(labels)), indices):
+            ax.axhline(index + 0.5,color='black',linestyle='--',linewidth=4,clip_on=False)
+            ax.text(-80,index,f'C:{label}',color='black',fontsize=12,ha='right',va='center',fontweight='medium')
+
+        ax.tick_params('x',which='both',rotation=0)
+        ax.set_ylabel('Building')
+        ax.set_xlabel('Timestep')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(schedule_name(filepath))
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_building_dbscan_cluster_timeseries_heatmap.png'), facecolor='white', bbox_inches='tight')
+    plt.close()
+
+
+    # # KNN distance
+    # row_count = len(SCHEDULE_DATA_FILEPATHS)
+    # column_count = 1
+    # fig, _ = plt.subplots(row_count, column_count, figsize=(6,3*row_count))
+
+    # for i, (ax, (schedule, schedule_data)) in enumerate(zip(fig.axes, knn_result['schedules'].items())):
+    #     y = sorted(schedule_data['distance'])
+    #     x = list(range(len(y)))
+    #     ax.plot(x,y)
+    #     ax.set_ylabel(f'distance to\nnearest neighbor')
+    #     ax.yaxis.tick_right()
+    #     ax.yaxis.set_label_position('right')
+    #     ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
+    #     ax.set_xlabel('sorted index')
+    #     ax.grid(True)
+    #     ax.set_title(schedule)
+
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(FIGURES_DIRECTORY,f'travis_county_knn_sorted_distance.png'), facecolor='white', bbox_inches='tight')
+    # plt.close()
+
+def fit_kmeans(filepath,n_clusters):
+    x = pd.read_pickle(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl')).values
+    result = KMeans(n_clusters=n_clusters, random_state=0).fit(x)
+    scores = {
+        'sse':result.inertia_,
+        'calinski_harabasz':calinski_harabasz_score(x,result.labels_),
+        'silhouette':silhouette_score(x,result.labels_)
+    }
+    return schedule_name(filepath), n_clusters, result.labels_.tolist(), scores
+
+def fit_knn(filepath,n_neighbors):
+    x = pd.read_pickle(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl')).values
+    distance, _ = NearestNeighbors(n_neighbors=n_neighbors).fit(x).kneighbors(x)
+    return schedule_name(filepath), distance[:,1].tolist()
+
+def fit_dbscan(filepath,eps,min_samples=None):
+    x = pd.read_pickle(os.path.join(SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{schedule_name(filepath)}.pkl')).values
+    min_samples = int(x.shape[1]*2) if min_samples is None else min_samples
+    result = DBSCAN(eps=eps,min_samples=min_samples).fit(x)
+    try:
+        scores = {
+            'sse':get_sse(x,result.labels_.tolist()),
+            'calinski_harabasz':calinski_harabasz_score(x,result.labels_),
+            'silhouette':silhouette_score(x,result.labels_)
+        }
+        return schedule_name(filepath), eps, min_samples, result.labels_.tolist(), scores
+    except ValueError as e:
+        return schedule_name(filepath), eps, min_samples, None
+
+def get_sse(x,labels):
+    df = pd.DataFrame(x)
+    df['label'] = labels
+    df = df.groupby('label').apply(lambda gr:
+        (gr.iloc[:,0:-1] - gr.iloc[:,0:-1].mean())**2
+    )
+    sse = df.sum().sum()
+    return sse
+
+manipulate()
+
+'''NOTE:
 '''
 # END

@@ -39,8 +39,7 @@ def write_json(filepath=None,dictionary=None):
     def default(obj):
         if isinstance(obj,datetime):
             return obj.__str__()
-            
-    
+
     try:
         with open(filepath,'w') as f:
             json.dump(dictionary,f,ignore_nan=True,sort_keys=False,default=default,indent=2)
