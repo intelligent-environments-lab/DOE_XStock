@@ -54,7 +54,9 @@ class Analysis:
         self.SCHEDULE_PCA_DATA_DIRECTORY = '../schedule_pca_data'
         self.SCHEDULE_SAX_DATA_DIRECTORY = '../schedule_sax_data'
         self.SCHEDULE_CLUSTER_DATA_DIRECTORY = '../schedule_cluster_data'
-        self.schedule_data_filepaths = [os.path.join(self.SCHEDULE_DATA_DIRECTORY,f) for f in os.listdir(self.SCHEDULE_DATA_DIRECTORY) if f.endswith('.pkl')]
+        self.schedule_data_filepaths = [
+            os.path.join(self.SCHEDULE_DATA_DIRECTORY,f) for f in os.listdir(self.SCHEDULE_DATA_DIRECTORY) if f.endswith('.pkl')
+        ]
         self.schedule_data_filepaths = sorted(self.schedule_data_filepaths)
         self.SEASONS = {
             1:'winter',2:'winter',12:'winter',
@@ -71,7 +73,9 @@ class Analysis:
         self.DATE_RANGE['week'] = self.DATE_RANGE['timestamp'].dt.isocalendar().week
         self.DATE_RANGE['date'] = self.DATE_RANGE['timestamp'].dt.normalize()
         self.DATE_RANGE['day_of_week'] = self.DATE_RANGE['timestamp'].dt.weekday
-        self.DATE_RANGE.loc[self.DATE_RANGE['day_of_week'] == 6, 'week_of'] = self.DATE_RANGE.loc[self.DATE_RANGE['day_of_week'] == 6]['timestamp'].dt.normalize()
+        self.DATE_RANGE.loc[self.DATE_RANGE[
+            'day_of_week'] == 6, 'week_of'
+        ] = self.DATE_RANGE.loc[self.DATE_RANGE['day_of_week'] == 6]['timestamp'].dt.normalize()
         self.DATE_RANGE['week_of'] = self.DATE_RANGE['week_of'].ffill()
         self.DATE_RANGE['season'] = self.DATE_RANGE['month'].map(lambda x: self.SEASONS[x])
         self.LOG_FILEPATH = '../output.log'
@@ -83,17 +87,62 @@ class Analysis:
         try:
             LOGGER.info('Started analysis.')
             self.run_schedule_analysis()
+            self.run_building_metadata_analysis()
         except Exception as e:
             LOGGER.exception(e)
         finally:
             LOGGER.info('Finished analysis.')
 
-    def run_schedule_analysis(self):
+    def run_building_metadata_analysis(self):
         # FIGURE ****************************************************************
-        '''DESCRIPTION: What are the catagories and distribution of values in the metadata? Helps form initial understanding of diversity across buildings.'''
+        '''DESCRIPTION: What are the catagories and distribution of values in the metadata? Helps form initial understanding of diversity 
+        across buildings.'''
         LOGGER.debug('Plotting building metadata.')
         self.plot_building_metadata()
-        
+
+    def plot_building_metadata(self):
+        # # numeric metadata
+        metadata = self.DATABASE.get_table('metadata')
+        columns_to_exclude = [
+            'id', 'bldg_id', 'dataset_id','upgrade','metadata_index','in_county','in_puma','in_ashrae_iecc_climate_zone_2004',
+            'in_building_america_climate_zone', 'in_iso_rto_region','applicability', 'in_ahs_region','in_applicable','in_cec_climate_zone',
+            'in_census_division','in_census_division_recs','in_census_region','in_geometry_building_type_acs','in_geometry_building_type_height',
+            'in_geometry_building_type_recs','in_state','in_weather_file_longitude','in_weather_file_latitude','in_weather_file_city',
+            'in_nhgis_county_gisjoin','in_state_name','in_american_housing_survey_region','in_weather_file_2018','in_weather_file_tmy3',
+            'in_resstock_county_id','in_vacancy_status'
+         ]
+        columns = [c for c in metadata.columns if c not in columns_to_exclude and pd.api.types.is_numeric_dtype(metadata[c])]
+        column_count = 6
+        row_count = math.ceil(len(columns)/column_count)
+        fig, _ = plt.subplots(row_count, column_count, figsize=(min(4,self.MAX_FIGURE_WIDTH)*column_count,3*row_count))
+
+        for ax, column in zip(fig.axes, columns):
+            ax.hist(metadata[column])
+            ax.set_title(split_lines(column, line_character_limit=28,delimiter='_'))
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'building_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
+        plt.close()
+
+        # non numeric metadata
+        columns = [c for c in metadata.columns if c not in columns_to_exclude and not pd.api.types.is_numeric_dtype(metadata[c])]
+        column_count = 4
+        row_count = math.ceil(len(columns)/column_count)
+        fig, _ = plt.subplots(row_count, column_count, figsize=(min(7,self.MAX_FIGURE_WIDTH)*column_count,6*row_count))
+
+        for ax, column in zip(fig.axes, columns):
+            plot_data = metadata.groupby(column).size().reset_index(name='count')
+            x, y = list(range(plot_data.shape[0])), plot_data['count']
+            ax.barh(x,y)
+            ax.set_yticks(x)
+            ax.set_yticklabels(plot_data[column].to_list())
+            ax.set_title(split_lines(column, line_character_limit=28,delimiter='_'))
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'building_non_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
+        plt.close()
+
+    def run_schedule_analysis(self):        
         # DATA MANIPULATION ****************************************************************
         '''DESCRIPTION: Retrieve schedule data from database and write to filepath for faster I/O.'''
         LOGGER.debug('Reading schedule data from database and saving to local file.')
@@ -774,7 +823,9 @@ class Analysis:
         plot_data['sax_paa'] = plot_data[plot_data.columns.tolist()].apply(lambda x: paa(x.values,self.SAX_W),axis=1)
         plot_data['sax_word'] = plot_data['sax_paa'].map(lambda x: ts_to_string(x,cuts_for_asize(self.SAX_A)))
         plot_data = plot_data.reset_index(drop=False)
-        plot_data[['metadata_id','date','sax_paa','sax_word']].to_pickle(os.path.join(self.SCHEDULE_SAX_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl'))
+        plot_data[['metadata_id','date','sax_paa','sax_word']].to_pickle(
+            os.path.join(self.SCHEDULE_SAX_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl')
+        )
         return self.schedule_name(filepath)
 
     def plot_schedule_corr(self):
@@ -847,7 +898,10 @@ class Analysis:
                 ax.set_title(self.schedule_name(filepath))
 
             plt.tight_layout()
-            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_hourly_{hue}_building_std_from_collective_mean_box_plot.png'), facecolor='white', bbox_inches='tight')
+            plt.savefig(
+                os.path.join(self.FIGURES_DIRECTORY,f'schedule_hourly_{hue}_building_std_from_collective_mean_box_plot.png'),
+                facecolor='white', bbox_inches='tight'
+            )
             plt.close()
 
     def plot_schedule_building_hourly_std_box_plot(self):
@@ -918,41 +972,6 @@ class Analysis:
                 day,
                 hour
             """).to_pickle(os.path.join(self.SCHEDULE_DATA_DIRECTORY,f'{column}.pkl'))
-
-    def plot_building_metadata(self):
-        # # numeric metadata
-        metadata = self.DATABASE.get_table('metadata')
-        columns_to_exclude = ['id', 'bldg_id', 'dataset_id','upgrade','metadata_index','in_county','in_puma','in_ashrae_iecc_climate_zone_2004', 'in_building_america_climate_zone', 'in_iso_rto_region', 'applicability', 'in_ahs_region', 'in_applicable','in_cec_climate_zone','in_census_division','in_census_division_recs','in_census_region','in_geometry_building_type_acs','in_geometry_building_type_height','in_geometry_building_type_recs','in_state','in_weather_file_longitude','in_weather_file_latitude','in_weather_file_city','in_nhgis_county_gisjoin','in_state_name','in_american_housing_survey_region','in_weather_file_2018','in_weather_file_tmy3','in_resstock_county_id','in_vacancy_status']
-        columns = [c for c in metadata.columns if c not in columns_to_exclude and pd.api.types.is_numeric_dtype(metadata[c])]
-        column_count = 6
-        row_count = math.ceil(len(columns)/column_count)
-        fig, _ = plt.subplots(row_count, column_count, figsize=(min(4,self.MAX_FIGURE_WIDTH)*column_count,3*row_count))
-
-        for ax, column in zip(fig.axes, columns):
-            ax.hist(metadata[column])
-            ax.set_title(split_lines(column, line_character_limit=28,delimiter='_'))
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'building_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
-        plt.close()
-
-        # non numeric metadata
-        columns = [c for c in metadata.columns if c not in columns_to_exclude and not pd.api.types.is_numeric_dtype(metadata[c])]
-        column_count = 4
-        row_count = math.ceil(len(columns)/column_count)
-        fig, _ = plt.subplots(row_count, column_count, figsize=(min(7,self.MAX_FIGURE_WIDTH)*column_count,6*row_count))
-
-        for ax, column in zip(fig.axes, columns):
-            plot_data = metadata.groupby(column).size().reset_index(name='count')
-            x, y = list(range(plot_data.shape[0])), plot_data['count']
-            ax.barh(x,y)
-            ax.set_yticks(x)
-            ax.set_yticklabels(plot_data[column].to_list())
-            ax.set_title(split_lines(column, line_character_limit=28,delimiter='_'))
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'building_non_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
-        plt.close()
     
     def set_logger(self):
         logging.getLogger('matplotlib').setLevel(logging.WARNING)
