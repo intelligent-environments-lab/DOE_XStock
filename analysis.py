@@ -77,147 +77,148 @@ class Analysis:
         self.LOG_FILEPATH = '../output.log'
         self.LOG_MAX_BYTES = 1E8
         self.LOG_BACKUP_COUNT = 0
-
-    def run(self):
         self.set_logger()
-        LOGGER.info('Started analysis.')
-        
+       
+    def run(self):
         try:
-            # FIGURE ****************************************************************
-            '''DESCRIPTION: What are the catagories and distribution of values in the metadata? Helps form initial understanding of diversity across buildings.'''
-            LOGGER.debug('Plotting building metadata.')
-            self.plot_metadata()
-            
-            # DATA MANIPULATION ****************************************************************
-            '''DESCRIPTION: Retrieve schedule data from database and write to filepath for faster I/O.'''
-            LOGGER.debug('Reading schedule data from database and saving to local file.')
-            # save_schedule_data()
-
-            # FIGURE ****************************************************************
-            '''DESCRIPTION: schedule hourly box plots categorized by day of week and season to investigate variance w.r.t. the categories.'''
-            LOGGER.debug('Plotting schedule hourly boxplot.')
-            self.plot_schedule_hourly_box_plot()
-            '''NOTE:
-            __Hourly variance when categorized by day-of-week__
-            - There are distinct hourly shapes i.e. all schedules change from hour to hour.
-            - there are day-of-week variations in the schedules w.r.t. to hour in some cases.
-            - For most schedules, weekdays have similar distribution.
-            - Friday and Saturday seem to be typically distinct from other days of the week (possible that E+ sims started with Monday as first day of week not Sunday as shown in EPW file).
-            - Some hours have no variance irrespective of the day of week i.e. 1 unique value for records hence, dimensionality reduction of the daily data
-            to a smaller dimension will be feasible e.g. instead of 24 hours of data to represent a day, maybe just use hours within 8 AM - 10 PM or so.
-            Maybe PCA can help with this dimension reduction.
-
-            __Hourly variance when categorized by season__
-            - There are indeed seasonal variations and particularly winter season seems to have higher values than other seasons.
-            - However, within a season, there may be little to no variance.
-            - Some schedules like occupancy show the same distribution irrespective of the season but show variance when categorized by day-of-week.'''
-
-            # DATA MANIPULATION ****************************************************************
-            '''DESCRIPTION: exclude the following schedules as they do not provide any variance.'''
-            schedules_to_exclude = ['plug_loads_vehicle','vacancy','lighting_exterior_holiday']
-            LOGGER.debug(f'Excluding the following schedules that do not provide variance temporally nor spatially: {schedules_to_exclude}.')
-            self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
-
-            # FIGURE ****************************************************************
-            '''DESCRIPTION: building schedule standard deviation hourly box plots categorized by day of week and season to investigate 
-            variance per building w.r.t. the categories.'''
-            LOGGER.debug('Plotting building schedule hourly std boxplot')
-            self.plot_building_schedule_hourly_std_box_plot()
-            '''NOTE:
-            __Hourly variance when categorized by day-of-week__
-            - Distinct buildings have hourly variance when hours are categorized by day-of-week as indicated by non-zero standard deviation distributions.
-            - Standard deviation tends to increase later in the day for most schedules.
-
-            __Hourly variance when categorized by season__
-            - Distinct buildings have hourly variance when hours are categorized by season as indicated by non-zero standard deviation distributions.
-            - Some schedules like fuel_loads_grill only have > 0 std for all buildings during fall because they have constant non-zero value during other seasons.'''
-
-            # FIGURE ****************************************************************
-            '''DESCRIPTION: building schedule standard deviation from general average hourly box plots categorized by day of week and season to investigate 
-            variance per building w.r.t. the categories.'''
-            LOGGER.debug('Plotting building schedule hourly std_wrt general avg boxplot')
-            self.plot_building_schedule_hourly_std_wrt_general_avg_box_plot()
-            '''NOTE:
-            - There are schedules that can be excluded from analyssi becasue there is no variance across buildings when their values are evaluated 
-            w.r.t. to a common mean value.'''
-
-            # DATA MANIPULATION ****************************************************************
-            '''DESCRIPTION: exclude the following schedules as they vary temporally but not spatially i.e. across buildings.'''
-            schedules_to_exclude = ['fuel_loads_fireplace','fuel_loads_grill','fuel_loads_lighting','lighting_exterior','lighting_garage','plug_loads_well_pump']
-            LOGGER.debug(f'Excluding the following schedules that vary temporally but not spatially i.e. across buildings: {schedules_to_exclude}.')
-            self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
-
-            # FIGURE ****************************************************************
-            '''DESCRIPTION: building schedule correlation to further narrow down the feature space.'''
-            LOGGER.debug(f'Plotting schedule correlation.')
-            self.save_schedule_corr()
-            self.plot_schedule_corr()
-            '''NOTE:
-            - Clothes dryer exhaust and clothes dryer have Pearson correlation = 1. 
-            - Also ligthing, plug load and ceiling fan are highly correlated. Lighting has higher correlation with the other 2 than the otehr 2 have with themselves and lighting so lighting may be used to represent all 3.'''
-
-            # DATA MANIPULATION ****************************************************************
-            '''DESCRIPTION: exclude the following schedules as they are highly correlated with other schedules.'''
-            schedules_to_exclude = ['clothes_dryer_exhaust','ceiling_fan','plug_loads']
-            LOGGER.debug(f'Excluding the following schedules that are highly correlated with other schedules: {schedules_to_exclude}.')
-            self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
-
-            # DATA MANIPULATION & FIGURE ****************************************************************
-            '''DESCRIPTION:
-            SAX transformation of the schedule time series using a window size of SAX_W for PAA and alphabet size of SAX_A for time series to word conversion.
-            The idea is that SAX compresses the data to discrete words describing the scehdule profiles that can be aggregated by counts of unique words 
-            per building 
-            and used as clustering dataset. Essentially this reduces the width of the clustering data from the length of the time series to the
-            number of unique words.'''
-            LOGGER.debug('Applying SAX transformation to schedules and saving transformed data.')
-            self.save_sax_data()
-            LOGGER.debug('Plotting SAX data.')
-            self.plot_sax_data()
-            '''NOTE:
-            - The schedules with wide variance e.g. appliance loads have about 16 unique words. 
-                Occupancy and some others have the larger number of unique words but still under 100 which is much less than using the entire 
-                timeseries as a selfuter datapoint.
-                Maybe, PCA can be applied as a second compression to further reduce the dimensionality?
-            - The heat map that shows the normalized word counts per building shows variance across the building which is a good sign that the clustering
-            might pick out building groups
-                (fingers crossed!).
-            '''
-
-            # DATA MANIPULATION & FIGURE ****************************************************************
-            '''DESCRIPTION:
-            Perform PCA transformation on the per building unqiue word counts data set to reduce the feature space of
-            those schedules that are large and extract the variables that best represent the variance in the word counts.
-            The features are used in the clustering analysis to extract the different building classes.'''
-            LOGGER.debug('Applying PCA to SAX data to further reduce dimensionality.')
-            self.save_pca_data()
-            LOGGER.debug('Plotting PCA data.')
-            self.plot_pca_data()
-            '''NOTE:
-            - Able to reduce the schedules with over 60 words to about 50 words when 95% of variance is desired from PCA components.
-            - In general all schedules could use lower dimension than discovered in SAX to explain variance and use as clustering dataset.
-            '''
-
-            # DATA MANIPULATION ****************************************************************
-            '''DESCRIPTION:
-            Perform clustering on the PCA components extracted from SAX dataset to identify characteristic schedules.'''
-            LOGGER.debug(f'Saving PCA data that explains {self.PCA_CUMMULATIVE_VARIANCE_THRESHOLD} variance as cluster data.')
-            self.save_cluster_data()
-            LOGGER.debug(f'Plotting cluster data.')
-            self.plot_cluster_data()
-            LOGGER.debug(f'Running KMeans cluster and saving results.')
-            self.run_kmeans()
-            LOGGER.debug(f'Plotting KMeans data.')
-            self.plot_kmeans()
-            LOGGER.debug(f'Running DBSCAN cluster and saving results.')
-            self.run_dbscan()
-            LOGGER.debug(f'Plotting DBSCAN data.')
-            self.plot_dbscan()
-        
+            LOGGER.info('Started analysis.')
+            self.run_schedule_analysis()
         except Exception as e:
             LOGGER.exception(e)
-
         finally:
-            LOGGER.info('Ended analysis.')
+            LOGGER.info('Finished analysis.')
+
+    def run_schedule_analysis(self):
+        # FIGURE ****************************************************************
+        '''DESCRIPTION: What are the catagories and distribution of values in the metadata? Helps form initial understanding of diversity across buildings.'''
+        LOGGER.debug('Plotting building metadata.')
+        self.plot_building_metadata()
+        
+        # DATA MANIPULATION ****************************************************************
+        '''DESCRIPTION: Retrieve schedule data from database and write to filepath for faster I/O.'''
+        LOGGER.debug('Reading schedule data from database and saving to local file.')
+        # save_schedule_data()
+
+        # FIGURE ****************************************************************
+        '''DESCRIPTION: schedule hourly box plots categorized by day of week and season to investigate variance w.r.t. the categories.'''
+        LOGGER.debug('Plotting schedule hourly boxplot.')
+        self.plot_schedule_hourly_box_plot()
+        '''NOTE:
+        __Hourly variance when categorized by day-of-week__
+        - There are distinct hourly shapes i.e. all schedules change from hour to hour.
+        - there are day-of-week variations in the schedules w.r.t. to hour in some cases.
+        - For most schedules, weekdays have similar distribution.
+        - Friday and Saturday seem to be typically distinct from other days of the week (possible that E+ sims started with Monday as first day of week not Sunday as shown in EPW file).
+        - Some hours have no variance irrespective of the day of week i.e. 1 unique value for records hence, dimensionality reduction of the daily data
+        to a smaller dimension will be feasible e.g. instead of 24 hours of data to represent a day, maybe just use hours within 8 AM - 10 PM or so.
+        Maybe PCA can help with this dimension reduction.
+
+        __Hourly variance when categorized by season__
+        - There are indeed seasonal variations and particularly winter season seems to have higher values than other seasons.
+        - However, within a season, there may be little to no variance.
+        - Some schedules like occupancy show the same distribution irrespective of the season but show variance when categorized by day-of-week.'''
+
+        # DATA MANIPULATION ****************************************************************
+        '''DESCRIPTION: exclude the following schedules as they do not provide any variance.'''
+        schedules_to_exclude = ['plug_loads_vehicle','vacancy','lighting_exterior_holiday']
+        LOGGER.debug(f'Excluding the following schedules that do not provide variance temporally nor spatially: {schedules_to_exclude}.')
+        self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
+
+        # FIGURE ****************************************************************
+        '''DESCRIPTION: building schedule standard deviation hourly box plots categorized by day of week and season to investigate 
+        variance per building w.r.t. the categories.'''
+        LOGGER.debug('Plotting building schedule hourly std boxplot')
+        self.plot_schedule_building_hourly_std_box_plot()
+        '''NOTE:
+        __Hourly variance when categorized by day-of-week__
+        - Distinct buildings have hourly variance when hours are categorized by day-of-week as indicated by non-zero standard deviation distributions.
+        - Standard deviation tends to increase later in the day for most schedules.
+
+        __Hourly variance when categorized by season__
+        - Distinct buildings have hourly variance when hours are categorized by season as indicated by non-zero standard deviation distributions.
+        - Some schedules like fuel_loads_grill only have > 0 std for all buildings during fall because they have constant non-zero value during other seasons.'''
+
+        # FIGURE ****************************************************************
+        '''DESCRIPTION: building schedule standard deviation from general average hourly box plots categorized by day of week and season to investigate 
+        variance per building w.r.t. the categories.'''
+        LOGGER.debug('Plotting building schedule hourly std_wrt general avg boxplot')
+        self.plot_schedule_building_hourly_std_wrt_general_avg_box_plot()
+        '''NOTE:
+        - There are schedules that can be excluded from analyssi becasue there is no variance across buildings when their values are evaluated 
+        w.r.t. to a common mean value.'''
+
+        # DATA MANIPULATION ****************************************************************
+        '''DESCRIPTION: exclude the following schedules as they vary temporally but not spatially i.e. across buildings.'''
+        schedules_to_exclude = ['fuel_loads_fireplace','fuel_loads_grill','fuel_loads_lighting','lighting_exterior','lighting_garage','plug_loads_well_pump']
+        LOGGER.debug(f'Excluding the following schedules that vary temporally but not spatially i.e. across buildings: {schedules_to_exclude}.')
+        self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
+
+        # FIGURE ****************************************************************
+        '''DESCRIPTION: building schedule correlation to further narrow down the feature space.'''
+        LOGGER.debug(f'Saving schedule correlation data.')
+        self.save_schedule_corr()
+        LOGGER.debug(f'Ploting schedule correlation data.')
+        self.plot_schedule_corr()
+        '''NOTE:
+        - Clothes dryer exhaust and clothes dryer have Pearson correlation = 1. 
+        - Also ligthing, plug load and ceiling fan are highly correlated. Lighting has higher correlation with the other 2 than the otehr 2 have with themselves and lighting so lighting may be used to represent all 3.'''
+
+        # DATA MANIPULATION ****************************************************************
+        '''DESCRIPTION: exclude the following schedules as they are highly correlated with other schedules.'''
+        schedules_to_exclude = ['clothes_dryer_exhaust','ceiling_fan','plug_loads']
+        LOGGER.debug(f'Excluding the following schedules that are highly correlated with other schedules: {schedules_to_exclude}.')
+        self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
+
+        # DATA MANIPULATION & FIGURE ****************************************************************
+        '''DESCRIPTION:
+        SAX transformation of the schedule time series using a window size of SAX_W for PAA and alphabet size of SAX_A for time series to word conversion.
+        The idea is that SAX compresses the data to discrete words describing the scehdule profiles that can be aggregated by counts of unique words 
+        per building 
+        and used as clustering dataset. Essentially this reduces the width of the clustering data from the length of the time series to the
+        number of unique words.'''
+        LOGGER.debug('Applying SAX transformation to schedules and saving transformed data.')
+        self.save_schedule_sax_data()
+        LOGGER.debug('Plotting SAX data.')
+        self.plot_schedule_sax_data()
+        '''NOTE:
+        - The schedules with wide variance e.g. appliance loads have about 16 unique words. 
+            Occupancy and some others have the larger number of unique words but still under 100 which is much less than using the entire 
+            timeseries as a selfuter datapoint.
+            Maybe, PCA can be applied as a second compression to further reduce the dimensionality?
+        - The heat map that shows the normalized word counts per building shows variance across the building which is a good sign that the clustering
+        might pick out building groups
+            (fingers crossed!).
+        '''
+
+        # DATA MANIPULATION & FIGURE ****************************************************************
+        '''DESCRIPTION:
+        Perform PCA transformation on the per building unqiue word counts data set to reduce the feature space of
+        those schedules that are large and extract the variables that best represent the variance in the word counts.
+        The features are used in the clustering analysis to extract the different building classes.'''
+        LOGGER.debug('Applying PCA to SAX data to further reduce dimensionality.')
+        self.save_schedule_pca_data()
+        LOGGER.debug('Plotting PCA data.')
+        self.plot_schedule_pca_data()
+        '''NOTE:
+        - Able to reduce the schedules with over 60 words to about 50 words when 95% of variance is desired from PCA components.
+        - In general all schedules could use lower dimension than discovered in SAX to explain variance and use as clustering dataset.
+        '''
+
+        # DATA MANIPULATION ****************************************************************
+        '''DESCRIPTION:
+        Perform clustering on the PCA components extracted from SAX dataset to identify characteristic schedules.'''
+        LOGGER.debug(f'Saving PCA data that explains {self.PCA_CUMMULATIVE_VARIANCE_THRESHOLD} variance as cluster data.')
+        self.save_schedule_cluster_data()
+        LOGGER.debug(f'Plotting cluster data.')
+        self.plot_schedule_cluster_data()
+        LOGGER.debug(f'Running KMeans cluster and saving results.')
+        self.run_kmeans()
+        LOGGER.debug(f'Plotting KMeans data.')
+        self.plot_kmeans()
+        LOGGER.debug(f'Running DBSCAN cluster and saving results.')
+        self.run_dbscan()
+        LOGGER.debug(f'Plotting DBSCAN data.')
+        self.plot_dbscan()
 
     def plot_dbscan(self):          
         knn_result = read_json(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json'))
@@ -241,7 +242,7 @@ class Analysis:
             ax.set_title(schedule)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'knn_sorted_distance.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_knn_sorted_distance.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # DBSCAN  scores
@@ -264,13 +265,13 @@ class Analysis:
         
         plt.tight_layout()
         fig.align_ylabels()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'dbscan_scores.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_dbscan_scores.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # DBSCAN label against timeseries
         row_count = len(self.schedule_data_filepaths)
         column_count = 1
-        fig, ax = plt.subplots(row_count,column_count,figsize=(min(10,self.MAX_FIGURE_WIDTH),10*row_count))
+        fig, axs = plt.subplots(row_count,column_count,figsize=(min(10,self.MAX_FIGURE_WIDTH),10*row_count))
 
         for i, (ax, filepath) in enumerate(zip(fig.axes, self.schedule_data_filepaths)):
             plot_data = pd.read_pickle(os.path.join(self.SCHEDULE_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl'))
@@ -301,13 +302,13 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'building_dbscan_cluster_timeseries_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_building_dbscan_cluster_timeseries_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # DBSCAN label against clusted pca data
         row_count = len(self.schedule_data_filepaths)
         column_count = 1
-        fig, ax = plt.subplots(row_count,column_count,figsize=(min(10,self.MAX_FIGURE_WIDTH),10*row_count))
+        fig, axs = plt.subplots(row_count,column_count,figsize=(min(10,self.MAX_FIGURE_WIDTH),10*row_count))
 
         for i, (ax, filepath) in enumerate(zip(fig.axes, self.schedule_data_filepaths)):
             plot_data = pd.read_pickle(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl'))
@@ -327,7 +328,7 @@ class Analysis:
 
             for label, index in zip(sorted(set(labels)), indices):
                 ax.axhline(index + 0.5,color='black',linestyle='--',linewidth=4,clip_on=False)
-                ax.text(-80,index,f'C:{label}',color='black',fontsize=12,ha='right',va='center',fontweight='medium')
+                ax.text(-0.5,index,f'C:{label}',color='black',fontsize=12,ha='right',va='center',fontweight='medium')
 
             ax.tick_params('x',which='both',rotation=0)
             ax.set_ylabel('Building')
@@ -337,7 +338,7 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'building_dbscan_cluster_pca_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_building_dbscan_cluster_pca_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
     def run_dbscan(self):
@@ -348,7 +349,7 @@ class Analysis:
             results = executor.map(self.fit_knn,*work_order)
 
             for r in results:
-                LOGGER.debug('finished fitting schedule:',r[0])
+                LOGGER.debug(f'finished fitting schedule: {r[0]}')
                 knn_result['schedules'][r[0]] = {}
                 knn_result['schedules'][r[0]]['distance'] = r[1]
         
@@ -381,9 +382,9 @@ class Analysis:
 
             for r in results:
                 if r[3] is None:
-                    LOGGER.debug('UNSUCCESSFUL fitting schedule:',r[0],'eps:',r[1],'min_samples:',r[2])
+                    LOGGER.debug(f'UNSUCCESSFUL fitting schedule: {r[0]}, eps: {r[1]}, min_samples: {r[2]}')
                 else:
-                    LOGGER.debug('finished fitting schedule:',r[0],'eps:',r[1],'min_samples:',r[2])
+                    LOGGER.debug(f'finished fitting schedule: {r[0]}, eps: {r[1]}, min_samples: {r[2]}')
                     dbscan_result['schedules'][r[0]]['eps'].append(r[1])
                     dbscan_result['schedules'][r[0]]['min_samples'].append(r[2])
                     dbscan_result['schedules'][r[0]]['min_samples'].append(r[2])
@@ -431,7 +432,7 @@ class Analysis:
 
         plt.tight_layout()
         fig.align_ylabels()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'kmeans_scores.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_kmeans_scores.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
     def run_kmeans(self): 
@@ -446,7 +447,7 @@ class Analysis:
             results = executor.map(self.fit_kmeans,*work_order)
 
             for r in results:
-                LOGGER.debug('finished fitting schedule:',r[0],'n_clusters:',r[1])
+                LOGGER.debug(f'finished fitting schedule: {r[0]}, n_clusters: {r[1]}')
                 kmeans_result['schedules'][r[0]]['labels'].append(r[2])
                 kmeans_result['schedules'][r[0]]['scores']['sse'].append(r[3]['sse'])
                 kmeans_result['schedules'][r[0]]['scores']['calinski_harabasz'].append(r[3]['calinski_harabasz'])
@@ -473,7 +474,7 @@ class Analysis:
         sse = df.sum().sum()
         return sse
     
-    def plot_cluster_data(self):
+    def plot_schedule_cluster_data(self):
         # cluster dataset
         row_count = len(self.schedule_data_filepaths)
         column_count = 1
@@ -493,10 +494,10 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'pca_cluster_dataset_building_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_pca_cluster_dataset_building_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
-    def save_cluster_data(self):
+    def save_schedule_cluster_data(self):
         explained_variance_ratio_data = read_json(os.path.join(self.SCHEDULE_PCA_DATA_DIRECTORY,f'explained_variance_ratio.json'))
 
         # prep cluster data
@@ -509,7 +510,7 @@ class Analysis:
             plot_data = plot_data.set_index('metadata_id').sort_index()
             plot_data.to_pickle(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl'))
 
-    def plot_pca_data(self):    
+    def plot_schedule_pca_data(self):    
         explained_variance_ratio_data = read_json(os.path.join(self.SCHEDULE_PCA_DATA_DIRECTORY,f'explained_variance_ratio.json'))
         # components per schedule
         _, ax = plt.subplots(1,1,figsize=(min(4,self.MAX_FIGURE_WIDTH),8))
@@ -521,7 +522,7 @@ class Analysis:
         ax.set_yticks(x)
         ax.set_yticklabels(list(explained_variance_ratio_data.keys()))
         ax.legend(title='Explained variance')
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'pca_threshold_satisfaction_components.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_pca_threshold_satisfaction_components.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # explained variance ratio
@@ -546,7 +547,7 @@ class Analysis:
 
         plt.tight_layout()
         fig.align_ylabels()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'pca_explained_variance_ratio.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_pca_explained_variance_ratio.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # distribution of components
@@ -565,7 +566,7 @@ class Analysis:
 
         plt.tight_layout()
         fig.align_ylabels()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'pca_component_distribution.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_pca_component_distribution.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # correlation between components and original variables
@@ -595,10 +596,10 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'pca_correlation_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_pca_correlation_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
-    def save_pca_data(self):
+    def save_schedule_pca_data(self):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             work_order = self.schedule_data_filepaths
             explained_variance_ratio_data = {}
@@ -619,6 +620,7 @@ class Analysis:
         plot_data = plot_data.groupby(['metadata_id','sax_word']).size().reset_index(name='count')
         plot_data = plot_data.pivot(index='metadata_id',columns='sax_word',values='count')
         plot_data = plot_data.fillna(0)
+        # standrdize
         scaler = StandardScaler()
         x = plot_data.values
         scaler = scaler.fit(x)
@@ -639,7 +641,7 @@ class Analysis:
         plot_data.to_csv(os.path.join(self.SCHEDULE_PCA_DATA_DIRECTORY,f'{self.schedule_name(filepath)}_correlation.csv'),index=False)
         return self.schedule_name(filepath), list(pca.explained_variance_ratio_)
          
-    def plot_sax_data(self):
+    def plot_schedule_sax_data(self):
         # collective word frequency
         row_count = len(self.schedule_data_filepaths)
         column_count = 1
@@ -660,7 +662,7 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'sax_word_frequency_count_bar_graph.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_sax_word_frequency_count_bar_graph.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # word frequency w.r.t. temporal features heatmap
@@ -685,7 +687,7 @@ class Analysis:
                 ax.set_title(self.schedule_name(filepath))
 
             plt.tight_layout()
-            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'sax_word_{classification}_frequency_count_heatmap.png'), facecolor='white', bbox_inches='tight')
+            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_sax_word_{classification}_frequency_count_heatmap.png'), facecolor='white', bbox_inches='tight')
             plt.close()
 
         # word occurence heatmpa across building to pick out groups of buildings on a temporal scale
@@ -710,7 +712,7 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'sax_word_norm_count_building_timeseries_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_sax_word_norm_count_building_timeseries_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # word count per building heatmap
@@ -734,10 +736,10 @@ class Analysis:
             ax.set_title(self.schedule_name(filepath))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'sax_word_norm_count_building_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_sax_word_norm_count_building_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
-    def save_sax_data(self):
+    def save_schedule_sax_data(self):
         with concurrent.futures.ProcessPoolExecutor(max_workers=len(self.schedule_data_filepaths)) as executor:
             work_order = self.schedule_data_filepaths
             results = [executor.submit(self.preprocess_sax,*[w]) for w in work_order]
@@ -751,7 +753,19 @@ class Analysis:
 
     def preprocess_sax(self,filepath):
         plot_data = pd.merge(pd.read_pickle(filepath),self.DATE_RANGE,on='timestep')
-        # normalize first
+
+        # normalize building values between 0 and 1 to remove effect of magnitude across buildings with
+        # highly correlated schedules
+        mini = plot_data.groupby(['metadata_id'])[[self.schedule_name(filepath)]].min().reset_index()
+        mini = mini.rename(columns={self.schedule_name(filepath):'min'})
+        maxi = plot_data.groupby(['metadata_id'])[[self.schedule_name(filepath)]].max().reset_index()
+        maxi = maxi.rename(columns={self.schedule_name(filepath):'max'})
+        plot_data = pd.merge(plot_data,mini,on='metadata_id',how='left')
+        plot_data = pd.merge(plot_data,maxi,on='metadata_id',how='left')
+        plot_data.describe().to_csv(f'{self.schedule_name(filepath)}_describe.csv')
+        plot_data[self.schedule_name(filepath)] = (plot_data[self.schedule_name(filepath)] - plot_data['min'])/(plot_data['max'] - plot_data['min'])
+        
+        # then standardize for SAX discretization purposes
         scaler = StandardScaler()
         x = plot_data[[self.schedule_name(filepath)]].values
         scaler = scaler.fit(x)
@@ -784,7 +798,7 @@ class Analysis:
         ax.set_xlabel(None)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'filtered_correlation_heatmap.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_filtered_correlation_heatmap.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
     def save_schedule_corr(self):
@@ -812,7 +826,7 @@ class Analysis:
         plot_data = plot_data.set_index(columns)
         plot_data.to_csv(os.path.join(self.SCHEDULE_DATA_DIRECTORY,'filtered_schedule_correlation.csv'),index=True)
 
-    def plot_building_schedule_hourly_std_wrt_general_avg_box_plot(self):
+    def plot_schedule_building_hourly_std_wrt_general_avg_box_plot(self):
         for hue in ['day_of_week','season']:
             row_count = len(self.schedule_data_filepaths)
             column_count = 1
@@ -833,10 +847,10 @@ class Analysis:
                 ax.set_title(self.schedule_name(filepath))
 
             plt.tight_layout()
-            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'hourly_{hue}_building_std_from_collective_mean_box_plot.png'), facecolor='white', bbox_inches='tight')
+            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_hourly_{hue}_building_std_from_collective_mean_box_plot.png'), facecolor='white', bbox_inches='tight')
             plt.close()
 
-    def plot_building_schedule_hourly_std_box_plot(self):
+    def plot_schedule_building_hourly_std_box_plot(self):
         for hue in ['day_of_week','season']:
             row_count = len(self.schedule_data_filepaths)
             column_count = 1
@@ -850,7 +864,7 @@ class Analysis:
                 ax.set_title(self.schedule_name(filepath))
 
             plt.tight_layout()
-            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'hourly_{hue}_building_std_box_plot.png'), facecolor='white', bbox_inches='tight')
+            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_hourly_{hue}_building_std_box_plot.png'), facecolor='white', bbox_inches='tight')
             plt.close()
 
     def plot_schedule_hourly_box_plot(self):
@@ -866,7 +880,7 @@ class Analysis:
                 ax.set_title(self.schedule_name(filepath))
 
             plt.tight_layout()
-            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'hourly_{hue}_box_plot.png'), facecolor='white', bbox_inches='tight')
+            plt.savefig(os.path.join(self.FIGURES_DIRECTORY,f'schedule_hourly_{hue}_box_plot.png'), facecolor='white', bbox_inches='tight')
             plt.close()
 
     def pca_threshold_satisfaction_index(self,variance_ratio):
@@ -905,7 +919,7 @@ class Analysis:
                 hour
             """).to_pickle(os.path.join(self.SCHEDULE_DATA_DIRECTORY,f'{column}.pkl'))
 
-    def plot_metadata(self):
+    def plot_building_metadata(self):
         # # numeric metadata
         metadata = self.DATABASE.get_table('metadata')
         columns_to_exclude = ['id', 'bldg_id', 'dataset_id','upgrade','metadata_index','in_county','in_puma','in_ashrae_iecc_climate_zone_2004', 'in_building_america_climate_zone', 'in_iso_rto_region', 'applicability', 'in_ahs_region', 'in_applicable','in_cec_climate_zone','in_census_division','in_census_division_recs','in_census_region','in_geometry_building_type_acs','in_geometry_building_type_height','in_geometry_building_type_recs','in_state','in_weather_file_longitude','in_weather_file_latitude','in_weather_file_city','in_nhgis_county_gisjoin','in_state_name','in_american_housing_survey_region','in_weather_file_2018','in_weather_file_tmy3','in_resstock_county_id','in_vacancy_status']
@@ -919,7 +933,7 @@ class Analysis:
             ax.set_title(split_lines(column, line_character_limit=28,delimiter='_'))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'building_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
         plt.close()
 
         # non numeric metadata
@@ -937,7 +951,7 @@ class Analysis:
             ax.set_title(split_lines(column, line_character_limit=28,delimiter='_'))
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'non_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
+        plt.savefig(os.path.join(self.FIGURES_DIRECTORY,'building_non_numeric_metadata_histogram.png'), facecolor='white', bbox_inches='tight')
         plt.close()
     
     def set_logger(self):
@@ -947,8 +961,6 @@ class Analysis:
         formatter = logging.Formatter('%(levelname)s - %(asctime)s: %(message)s')
         handler.setFormatter(formatter)
         LOGGER.addHandler(handler)
-
-    
 
 if __name__ == '__main__':
     Analysis().run()
