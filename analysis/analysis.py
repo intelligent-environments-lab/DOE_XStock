@@ -3,6 +3,9 @@ import logging
 import logging.handlers
 import os
 import math
+from pathlib import Path
+import sys
+sys.path.insert(0,'..')
 from matplotlib import cm
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
@@ -46,14 +49,15 @@ class Analysis:
         # CONSTANTS & VARIABLES ****************************************************************
         plt.rcParams['axes.xmargin'] = 0
         plt.rcParams['axes.ymargin'] = 0
-        self.DATABASE_FILEPATH = '/Users/kingsleyenweye/Desktop/INTELLIGENT_ENVIRONMENT_LAB/doe_xstock/database.db'
+        self.ROOT_DIRECTORY = Path('/Users/kingsleyenweye/Desktop/INTELLIGENT_ENVIRONMENT_LAB/doe_xstock/')
+        self.DATABASE_FILEPATH = os.path.join(self.ROOT_DIRECTORY,'database.db')
         self.DATABASE = SQLiteDatabase(self.DATABASE_FILEPATH)
         self.FIGURES_DIRECTORY = 'figures/'
         self.MAX_FIGURE_WIDTH = 10
-        self.SCHEDULE_DATA_DIRECTORY = '../schedule_data'
-        self.SCHEDULE_PCA_DATA_DIRECTORY = '../schedule_pca_data'
-        self.SCHEDULE_SAX_DATA_DIRECTORY = '../schedule_sax_data'
-        self.SCHEDULE_CLUSTER_DATA_DIRECTORY = '../schedule_cluster_data'
+        self.SCHEDULE_DATA_DIRECTORY = os.path.join(self.ROOT_DIRECTORY,'schedule_data')
+        self.SCHEDULE_PCA_DATA_DIRECTORY = os.path.join(self.ROOT_DIRECTORY,'schedule_pca_data')
+        self.SCHEDULE_SAX_DATA_DIRECTORY = os.path.join(self.ROOT_DIRECTORY,'schedule_sax_data')
+        self.SCHEDULE_CLUSTER_DATA_DIRECTORY = os.path.join(self.ROOT_DIRECTORY,'schedule_cluster_data')
         self.schedule_data_filepaths = [
             os.path.join(self.SCHEDULE_DATA_DIRECTORY,f) for f in os.listdir(self.SCHEDULE_DATA_DIRECTORY) if f.endswith('.pkl')
         ]
@@ -65,8 +69,8 @@ class Analysis:
             9:'fall',10:'fall',11:'fall',
         }
         self.PCA_CUMMULATIVE_VARIANCE_THRESHOLD = 0.95
-        self.SAX_A = 3
-        self.SAX_W = 4
+        self.SAX_A = 5
+        self.SAX_W = 24
         self.DATE_RANGE = pd.DataFrame({'timestamp':pd.date_range('2017-01-01','2017-12-31 23:00:00', freq='H')})
         self.DATE_RANGE['timestep'] = self.DATE_RANGE.index
         self.DATE_RANGE['month'] = self.DATE_RANGE['timestamp'].dt.month
@@ -143,29 +147,29 @@ class Analysis:
         plt.close()
 
     def run_schedule_analysis(self):        
-        # DATA MANIPULATION ****************************************************************
-        '''DESCRIPTION: Retrieve schedule data from database and write to filepath for faster I/O.'''
+        # # DATA MANIPULATION ****************************************************************
+        # '''DESCRIPTION: Retrieve schedule data from database and write to filepath for faster I/O.'''
         LOGGER.debug('Reading schedule data from database and saving to local file.')
-        # save_schedule_data()
+        # self.save_schedule_data()
 
-        # FIGURE ****************************************************************
-        '''DESCRIPTION: schedule hourly box plots categorized by day of week and season to investigate variance w.r.t. the categories.'''
-        LOGGER.debug('Plotting schedule hourly boxplot.')
-        self.plot_schedule_hourly_box_plot()
-        '''NOTE:
-        __Hourly variance when categorized by day-of-week__
-        - There are distinct hourly shapes i.e. all schedules change from hour to hour.
-        - there are day-of-week variations in the schedules w.r.t. to hour in some cases.
-        - For most schedules, weekdays have similar distribution.
-        - Friday and Saturday seem to be typically distinct from other days of the week (possible that E+ sims started with Monday as first day of week not Sunday as shown in EPW file).
-        - Some hours have no variance irrespective of the day of week i.e. 1 unique value for records hence, dimensionality reduction of the daily data
-        to a smaller dimension will be feasible e.g. instead of 24 hours of data to represent a day, maybe just use hours within 8 AM - 10 PM or so.
-        Maybe PCA can help with this dimension reduction.
+        # # FIGURE ****************************************************************
+        # '''DESCRIPTION: schedule hourly box plots categorized by day of week and season to investigate variance w.r.t. the categories.'''
+        # LOGGER.debug('Plotting schedule hourly boxplot.')
+        # self.plot_schedule_hourly_box_plot()
+        # '''NOTE:
+        # __Hourly variance when categorized by day-of-week__
+        # - There are distinct hourly shapes i.e. all schedules change from hour to hour.
+        # - there are day-of-week variations in the schedules w.r.t. to hour in some cases.
+        # - For most schedules, weekdays have similar distribution.
+        # - Friday and Saturday seem to be typically distinct from other days of the week (possible that E+ sims started with Monday as first day of week not Sunday as shown in EPW file).
+        # - Some hours have no variance irrespective of the day of week i.e. 1 unique value for records hence, dimensionality reduction of the daily data
+        # to a smaller dimension will be feasible e.g. instead of 24 hours of data to represent a day, maybe just use hours within 8 AM - 10 PM or so.
+        # Maybe PCA can help with this dimension reduction.
 
-        __Hourly variance when categorized by season__
-        - There are indeed seasonal variations and particularly winter season seems to have higher values than other seasons.
-        - However, within a season, there may be little to no variance.
-        - Some schedules like occupancy show the same distribution irrespective of the season but show variance when categorized by day-of-week.'''
+        # __Hourly variance when categorized by season__
+        # - There are indeed seasonal variations and particularly winter season seems to have higher values than other seasons.
+        # - However, within a season, there may be little to no variance.
+        # - Some schedules like occupancy show the same distribution irrespective of the season but show variance when categorized by day-of-week.'''
 
         # DATA MANIPULATION ****************************************************************
         '''DESCRIPTION: exclude the following schedules as they do not provide any variance.'''
@@ -173,28 +177,28 @@ class Analysis:
         LOGGER.debug(f'Excluding the following schedules that do not provide variance temporally nor spatially: {schedules_to_exclude}.')
         self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
 
-        # FIGURE ****************************************************************
-        '''DESCRIPTION: building schedule standard deviation hourly box plots categorized by day of week and season to investigate 
-        variance per building w.r.t. the categories.'''
-        LOGGER.debug('Plotting building schedule hourly std boxplot')
-        self.plot_schedule_building_hourly_std_box_plot()
-        '''NOTE:
-        __Hourly variance when categorized by day-of-week__
-        - Distinct buildings have hourly variance when hours are categorized by day-of-week as indicated by non-zero standard deviation distributions.
-        - Standard deviation tends to increase later in the day for most schedules.
+        # # FIGURE ****************************************************************
+        # '''DESCRIPTION: building schedule standard deviation hourly box plots categorized by day of week and season to investigate 
+        # variance per building w.r.t. the categories.'''
+        # LOGGER.debug('Plotting building schedule hourly std boxplot')
+        # self.plot_schedule_building_hourly_std_box_plot()
+        # '''NOTE:
+        # __Hourly variance when categorized by day-of-week__
+        # - Distinct buildings have hourly variance when hours are categorized by day-of-week as indicated by non-zero standard deviation distributions.
+        # - Standard deviation tends to increase later in the day for most schedules.
 
-        __Hourly variance when categorized by season__
-        - Distinct buildings have hourly variance when hours are categorized by season as indicated by non-zero standard deviation distributions.
-        - Some schedules like fuel_loads_grill only have > 0 std for all buildings during fall because they have constant non-zero value during other seasons.'''
+        # __Hourly variance when categorized by season__
+        # - Distinct buildings have hourly variance when hours are categorized by season as indicated by non-zero standard deviation distributions.
+        # - Some schedules like fuel_loads_grill only have > 0 std for all buildings during fall because they have constant non-zero value during other seasons.'''
 
-        # FIGURE ****************************************************************
-        '''DESCRIPTION: building schedule standard deviation from general average hourly box plots categorized by day of week and season to investigate 
-        variance per building w.r.t. the categories.'''
-        LOGGER.debug('Plotting building schedule hourly std_wrt general avg boxplot')
-        self.plot_schedule_building_hourly_std_wrt_general_avg_box_plot()
-        '''NOTE:
-        - There are schedules that can be excluded from analyssi becasue there is no variance across buildings when their values are evaluated 
-        w.r.t. to a common mean value.'''
+        # # FIGURE ****************************************************************
+        # '''DESCRIPTION: building schedule standard deviation from general average hourly box plots categorized by day of week and season to investigate 
+        # variance per building w.r.t. the categories.'''
+        # LOGGER.debug('Plotting building schedule hourly std_wrt general avg boxplot')
+        # self.plot_schedule_building_hourly_std_wrt_general_avg_box_plot()
+        # '''NOTE:
+        # - There are schedules that can be excluded from analyssi becasue there is no variance across buildings when their values are evaluated 
+        # w.r.t. to a common mean value.'''
 
         # DATA MANIPULATION ****************************************************************
         '''DESCRIPTION: exclude the following schedules as they vary temporally but not spatially i.e. across buildings.'''
@@ -202,15 +206,15 @@ class Analysis:
         LOGGER.debug(f'Excluding the following schedules that vary temporally but not spatially i.e. across buildings: {schedules_to_exclude}.')
         self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
 
-        # FIGURE ****************************************************************
-        '''DESCRIPTION: building schedule correlation to further narrow down the feature space.'''
-        LOGGER.debug(f'Saving schedule correlation data.')
-        self.save_schedule_corr()
-        LOGGER.debug(f'Ploting schedule correlation data.')
-        self.plot_schedule_corr()
-        '''NOTE:
-        - Clothes dryer exhaust and clothes dryer have Pearson correlation = 1. 
-        - Also ligthing, plug load and ceiling fan are highly correlated. Lighting has higher correlation with the other 2 than the otehr 2 have with themselves and lighting so lighting may be used to represent all 3.'''
+        # # FIGURE ****************************************************************
+        # '''DESCRIPTION: building schedule correlation to further narrow down the feature space.'''
+        # LOGGER.debug(f'Saving schedule correlation data.')
+        # self.save_schedule_corr()
+        # LOGGER.debug(f'Ploting schedule correlation data.')
+        # self.plot_schedule_corr()
+        # '''NOTE:
+        # - Clothes dryer exhaust and clothes dryer have Pearson correlation = 1. 
+        # - Also ligthing, plug load and ceiling fan are highly correlated. Lighting has higher correlation with the other 2 than the otehr 2 have with themselves and lighting so lighting may be used to represent all 3.'''
 
         # DATA MANIPULATION ****************************************************************
         '''DESCRIPTION: exclude the following schedules as they are highly correlated with other schedules.'''
@@ -218,26 +222,32 @@ class Analysis:
         LOGGER.debug(f'Excluding the following schedules that are highly correlated with other schedules: {schedules_to_exclude}.')
         self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
 
-        # DATA MANIPULATION & FIGURE ****************************************************************
-        '''DESCRIPTION:
-        SAX transformation of the schedule time series using a window size of SAX_W for PAA and alphabet size of SAX_A for time series to word conversion.
-        The idea is that SAX compresses the data to discrete words describing the scehdule profiles that can be aggregated by counts of unique words 
-        per building 
-        and used as clustering dataset. Essentially this reduces the width of the clustering data from the length of the time series to the
-        number of unique words.'''
-        LOGGER.debug('Applying SAX transformation to schedules and saving transformed data.')
-        self.save_schedule_sax_data()
-        LOGGER.debug('Plotting SAX data.')
-        self.plot_schedule_sax_data()
-        '''NOTE:
-        - The schedules with wide variance e.g. appliance loads have about 16 unique words. 
-            Occupancy and some others have the larger number of unique words but still under 100 which is much less than using the entire 
-            timeseries as a selfuter datapoint.
-            Maybe, PCA can be applied as a second compression to further reduce the dimensionality?
-        - The heat map that shows the normalized word counts per building shows variance across the building which is a good sign that the clustering
-        might pick out building groups
-            (fingers crossed!).
-        '''
+        # DATA MANIPULATION ****************************************************************
+        '''DESCRIPTION: exclude the following schedules as they are not as relevant.'''
+        schedules_to_exclude = ['clothes_washer_power','dishwasher_power','sleep']
+        LOGGER.debug(f'Excluding the following schedules as they are not as relevant as other schedules: {schedules_to_exclude}.')
+        self.schedule_data_filepaths = [f for f in self.schedule_data_filepaths if not self.schedule_name(f) in schedules_to_exclude]
+
+        # # DATA MANIPULATION & FIGURE ****************************************************************
+        # '''DESCRIPTION:
+        # SAX transformation of the schedule time series using a window size of SAX_W for PAA and alphabet size of SAX_A for time series to word conversion.
+        # The idea is that SAX compresses the data to discrete words describing the scehdule profiles that can be aggregated by counts of unique words 
+        # per building 
+        # and used as clustering dataset. Essentially this reduces the width of the clustering data from the length of the time series to the
+        # number of unique words.'''
+        # LOGGER.debug('Applying SAX transformation to schedules and saving transformed data.')
+        # self.save_schedule_sax_data()
+        # LOGGER.debug('Plotting SAX data.')
+        # self.plot_schedule_sax_data()
+        # '''NOTE:
+        # - The schedules with wide variance e.g. appliance loads have about 16 unique words. 
+        #     Occupancy and some others have the larger number of unique words but still under 100 which is much less than using the entire 
+        #     timeseries as a selfuter datapoint.
+        #     Maybe, PCA can be applied as a second compression to further reduce the dimensionality?
+        # - The heat map that shows the normalized word counts per building shows variance across the building which is a good sign that the clustering
+        # might pick out building groups
+        #     (fingers crossed!).
+        # '''
 
         # DATA MANIPULATION & FIGURE ****************************************************************
         '''DESCRIPTION:
@@ -245,9 +255,9 @@ class Analysis:
         those schedules that are large and extract the variables that best represent the variance in the word counts.
         The features are used in the clustering analysis to extract the different building classes.'''
         LOGGER.debug('Applying PCA to SAX data to further reduce dimensionality.')
-        self.save_schedule_pca_data()
+        # self.save_schedule_pca_data()
         LOGGER.debug('Plotting PCA data.')
-        self.plot_schedule_pca_data()
+        # self.plot_schedule_pca_data()
         '''NOTE:
         - Able to reduce the schedules with over 60 words to about 50 words when 95% of variance is desired from PCA components.
         - In general all schedules could use lower dimension than discovered in SAX to explain variance and use as clustering dataset.
@@ -257,13 +267,13 @@ class Analysis:
         '''DESCRIPTION:
         Perform clustering on the PCA components extracted from SAX dataset to identify characteristic schedules.'''
         LOGGER.debug(f'Saving PCA data that explains {self.PCA_CUMMULATIVE_VARIANCE_THRESHOLD} variance as cluster data.')
-        self.save_schedule_cluster_data()
+        # self.save_schedule_cluster_data()
         LOGGER.debug(f'Plotting cluster data.')
-        self.plot_schedule_cluster_data()
+        # self.plot_schedule_cluster_data()
         LOGGER.debug(f'Running KMeans cluster and saving results.')
-        self.run_kmeans()
+        # self.run_kmeans()
         LOGGER.debug(f'Plotting KMeans data.')
-        self.plot_kmeans()
+        # self.plot_kmeans()
         LOGGER.debug(f'Running DBSCAN cluster and saving results.')
         self.run_dbscan()
         LOGGER.debug(f'Plotting DBSCAN data.')
@@ -442,26 +452,23 @@ class Analysis:
                 LOGGER.debug(f'finished fitting schedule: {r[0]}')
                 knn_result['schedules'][r[0]] = {}
                 knn_result['schedules'][r[0]]['distance'] = r[1]
-        
+
             write_json(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json'),knn_result)
 
         # Now apply DBSCAN
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            dbscan_eps = read_json(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'dbscan_eps.json'))
+            knn_result = read_json(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json'))
             work_order = [[],[]]
             dbscan_result = {'schedules':{}}
             step = 0.1
 
-            for filepath in dbscan_eps:
-                eps = dbscan_eps[filepath]
-                distance = read_json(
-                    os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'knn_result.json')
-                )['schedules'][self.schedule_name(filepath)]['distance']
+            for schedule, schedule_data in knn_result['schedules'].items():
+                distance = schedule_data['distance']
                 mini, maxi = max(round(min(distance),1),step), round(max(distance),1)
                 eps = np.arange(mini,maxi,step).tolist()
                 work_order[1] += eps
-                work_order[0] += [filepath]*len(eps)
-                dbscan_result['schedules'][self.schedule_name(filepath)] = {
+                work_order[0] += [f'{schedule}.pkl']*len(eps)
+                dbscan_result['schedules'][schedule] = {
                     'eps':[],
                     'min_samples':[],
                     'scores':{'sse':[],'calinski_harabasz':[],'silhouette':[]},
@@ -488,6 +495,7 @@ class Analysis:
     def fit_dbscan(self,filepath,eps,min_samples=None):
         x = pd.read_pickle(os.path.join(self.SCHEDULE_CLUSTER_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl')).values
         min_samples = int(x.shape[1]*2) if min_samples is None else min_samples
+        min_samples = 2
         result = DBSCAN(eps=eps,min_samples=min_samples).fit(x)
         try:
             scores = {
@@ -690,7 +698,7 @@ class Analysis:
         plt.close()
 
     def save_schedule_pca_data(self):
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             work_order = self.schedule_data_filepaths
             explained_variance_ratio_data = {}
             results = [executor.submit(self.preprocess_pca,*[w]) for w in work_order]
@@ -710,14 +718,15 @@ class Analysis:
         plot_data = plot_data.groupby(['metadata_id','sax_word']).size().reset_index(name='count')
         plot_data = plot_data.pivot(index='metadata_id',columns='sax_word',values='count')
         plot_data = plot_data.fillna(0)
+        
         # standrdize
         scaler = StandardScaler()
         x = plot_data.values
         scaler = scaler.fit(x)
         x = scaler.transform(x)
-        pca = PCA(n_components=None)
+        pca = PCA(n_components=self.PCA_CUMMULATIVE_VARIANCE_THRESHOLD,svd_solver='full')
         pca = pca.fit(x)
-        component_data = pd.DataFrame(pca.transform(x), columns=range(0,plot_data.shape[1]))
+        component_data = pd.DataFrame(pca.transform(x))
         index_data = plot_data.reset_index(drop=False)[['metadata_id']].copy()
         index_data = pd.concat([index_data,component_data],axis=1)
         index_data.to_pickle(os.path.join(self.SCHEDULE_PCA_DATA_DIRECTORY,f'{self.schedule_name(filepath)}.pkl'))
@@ -990,6 +999,7 @@ class Analysis:
         # schedules
         schedule_columns = self.DATABASE.query_table("""PRAGMA table_info(schedule)""")
         schedule_columns = schedule_columns[~schedule_columns['name'].isin(['metadata_id','timestep'])]['name'].tolist()
+        in_resstock_puma_id = 'TX, 05301'
 
         for i, column in enumerate(schedule_columns):
             self.DATABASE.query_table(f"""
@@ -1006,6 +1016,7 @@ class Analysis:
                     CAST(timestep/96 AS INTEGER) AS day,
                     {column}
                 FROM schedule
+                WHERE metadata_id IN (SELECT id FROM metadata WHERE in_resstock_puma_id = '{in_resstock_puma_id}')
             ) t
             GROUP BY
                 metadata_id,
