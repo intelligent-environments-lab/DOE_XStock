@@ -1,7 +1,10 @@
 from io import StringIO
 import os
+import re
 from eppy.modeleditor import IDF
+from eppy.runner.run_functions import runIDFs
 from openstudio import energyplus, osversion
+from doe_xstock.database import SQLiteDatabase
 from doe_xstock.utilities import get_data_from_path, write_data
 
 class OpenStudioModelEditor:
@@ -71,6 +74,8 @@ class OpenStudioModelEditor:
 
         # add ideal load system
         for zone in osm.getThermalZones():
+            # check if zone has thermostat
+                
             zone.setUseIdealAirLoads(True)
             
         osm = str(osm)
@@ -88,6 +93,7 @@ class Simulator:
         self.idf = idf
         self.simulation_id = simulation_id
         self.output_directory = output_directory
+        self.__epw_filepath = None
     
     @property
     def idd_filepath(self):
@@ -108,6 +114,10 @@ class Simulator:
     @property
     def output_directory(self):
         return self.__output_directory
+
+    @property
+    def epw_filepath(self):
+        return self.__epw_filepath
 
     @idd_filepath.setter
     def idd_filepath(self,idd_filepath):
@@ -131,24 +141,143 @@ class Simulator:
     def output_directory(self,output_directory):
         self.__output_directory = output_directory if output_directory is not None else 'simulation'
 
+    def get_database(self):
+        filepath = os.path.join(self.output_directory,f'{self.simulation_id}.sql')
+
+        if os.path.isfile(filepath):
+            return SQLiteDatabase(filepath)
+        else:
+            raise FileNotFoundError(f'No SQLite database exists for simulation. Make sure a simluation has been run'\
+                ' using simulate function and the simulation is set to output into SQLite database.')
+    
+    @staticmethod
+    def multi_simulate(simulators,max_workers=1):
+        runs = []
+
+        for simulator in simulators:
+            os.makedirs(simulator.output_directory,exist_ok=True)
+            simulator.__write_epw()
+            idf = simulator.get_idf_object(weather=simulator.epw_filepath)
+            kwargs = simulator.get_run_kwargs()
+            runs.append([idf,kwargs])
+        
+        runIDFs(runs,max_workers)
+
     def simulate(self,**run_kwargs):
         os.makedirs(self.output_directory,exist_ok=True)
         self.__write_epw()
         self.__write_idf()
-        run_kwargs = self.__get_run_kwargs(**run_kwargs if run_kwargs is not None else {})
-        idf = self.get_idf_object(weather=self.__epw_filepath) 
+        run_kwargs = self.get_run_kwargs(**run_kwargs if run_kwargs is not None else {})
+        idf = self.get_idf_object(weather=self.epw_filepath) 
         idf.run(**run_kwargs)
 
-    def __get_run_kwargs(self,**kwargs):
+    def remove_ems_objs_in_error(self,patterns=None):
+        default_patterns = [r'EnergyManagementSystem:Sensor=\S+',r'EnergyManagementSystem:ProgramCallingManager=.+\s+']
+        patterns = default_patterns if patterns is None else patterns
+        objs = {}
+        removed_objs = {}
+        
+        error = self.get_error()
+        idf = self.get_idf_object()
+    
+        for k, v in [o.strip().strip('\n').split('=') for p in patterns for o in re.findall(p,error)]:
+            v = v.lower()
+            objs[k] = objs[k] + [v] if k in objs.keys() else [v]
+
+        for k, obj in [(k, obj) for k, v in objs.items() for obj in idf.idfobjects[k] if obj.Name.lower() in v]:
+            idf.removeidfobject(obj)
+            removed_objs[k] = removed_objs[k] + [obj.Name] if k in removed_objs.keys() else [obj.Name]
+
+        self.idf = idf.idfstr()
+        return removed_objs
+
+    def redefine_ems_program_in_line_error(self):
+        objs = {}
+        idf = self.get_idf_object()
+
+        for t, i, k, v in self.get_ems_program_line_error():
+            o = idf.idfobjects[t][i]
+            for l in v:
+                current_line = o[f'Program_Line_{l}']
+
+                if current_line.startswith('Set'):
+                    o[f'Program_Line_{l}'] = f'Set {k.lower()} = 0'
+                elif current_line.startswith('If'):
+                    o[f'Program_Line_{l}'] = f'If 1<0'
+                else:
+                    raise AssertionError(f'Unknown line format: {current_line}')
+                
+            objs[t] = {**objs.get(t,{}),**{k:v}}
+
+        self.idf = idf.idfstr()
+        return objs
+
+    def remove_ems_program_objs_in_line_error(self):
+        objs = {}
+        idf = self.get_idf_object()
+        
+        for t, i, k, _ in self.get_ems_program_line_error():
+            idf.removeidfobject(idf.idfobjects[t][i])
+            objs[t] = objs[t] + [k] if t in objs.keys() else [k]
+
+        self.idf = idf.idfstr()
+        return objs
+
+    def get_ems_program_line_error(self):
+        target_objs = ['EnergyManagementSystem:Program','EnergyManagementSystem:Subroutine']
+        error = self.get_error()
+        objs = {}
+        line_errors = []
+        idf = self.get_idf_object()
+        matches = re.findall(r'\*\* Severe  \*\* Problem found in EMS EnergyPlus Runtime Language\.\s+'\
+            r'\*\*   ~~~   \*\* Erl program name:.+\s+'\
+                r'\*\*   ~~~   \*\* Erl program line number:.+\s+',error
+        )
+
+        for match in matches:
+            match = match.split('\n   **   ~~~   ** ')
+            program_name = match[1].split(': ')[-1].lower()
+            line_number = match[2].strip().strip('\n').split(': ')[-1]
+            objs[program_name] = objs[program_name] + [line_number] if program_name in objs.keys() else [line_number]
+
+        for k, v in objs.items():
+            for t, o, i in [(t, o, i) for t in target_objs for i, o in enumerate(idf.idfobjects[t])]:
+                if o.Name.lower() == k:
+                    line_errors.append((t,i,k,v))
+                else:
+                    continue
+
+        return line_errors
+
+    def has_ems_program_error(self):
+        return len(re.findall(
+            r'\*\*  Fatal  \*\* Previous EMS error caused program termination',
+            self.get_error()
+        )) > 0
+
+    def has_ems_input_error(self):
+        patterns = [
+            r'\*\*  Fatal  \*\* Errors found in processing Energy Management System input. Preceding condition causes termination',
+            r'\*\*  Fatal  \*\* Errors found in getting Energy Management System input. Preceding condition causes termination',
+        ]
+        error = self.get_error()
+        return len([re.findall(p,error) for p in patterns]) > 0
+
+    def get_error(self):
+        filepath = os.path.join(self.output_directory,f'{self.simulation_id}.err')
+        error = get_data_from_path(filepath)
+        return error
+
+    def get_run_kwargs(self,**kwargs):
         idf = self.get_idf_object()
         idf_version = idf.idfobjects['version'][0].Version_Identifier.split('.')
         idf_version.extend([0] * (3 - len(idf_version)))
         idf_version_str = '-'.join([str(item) for item in idf_version])
         options = {
             'ep_version':idf_version_str,
-            'output_prefix':self.simulation_id,
+            'output_prefix':str(self.simulation_id),
             'output_suffix':'C',
-            'output_directory':self.output_directory,
+            'output_directory':str(self.output_directory),
             'readvars':True,
             'expandobjects':True,
             'verbose':'q',

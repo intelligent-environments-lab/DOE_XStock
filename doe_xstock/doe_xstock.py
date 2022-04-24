@@ -16,7 +16,7 @@ from doe_xstock.utilities import read_json, write_data
 
 logging_config = read_json(os.path.join(os.path.dirname(__file__),'misc/logging_config.json'))
 logging.config.dictConfig(logging_config)
-LOGGER = logging.getLogger('doe_xstock')
+LOGGER = logging.getLogger('doe_xstock_a')
 
 class DOEXStock:
     DEFAULT_DATABASE_FILEPATH = 'doe_xstock.db'

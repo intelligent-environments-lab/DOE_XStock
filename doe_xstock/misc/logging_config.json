@@ -11,10 +11,16 @@
             "class": "logging.StreamHandler",
             "formatter": "detailed"
         },
-        "file": {
+        "file_a": {
             "class": "logging.FileHandler",
-            "filename": "doe_xstock.log",
+            "filename": "doe_xstock_a.log",
             "mode": "a",
+            "formatter": "detailed"
+        },
+        "file_w": {
+            "class": "logging.FileHandler",
+            "filename": "doe_xstock_w.log",
+            "mode": "w",
             "formatter": "detailed"
         }
     },
@@ -23,9 +29,13 @@
             "level": "WARNING",
             "handlers": ["console"]
         },
-        "doe_xstock": {
+        "doe_xstock_a": {
             "level": "DEBUG",
-            "handlers": ["file"]
+            "handlers": ["file_a"]
+        },
+        "doe_xstock_w": {
+            "level": "DEBUG",
+            "handlers": ["file_w"]
         }
     }
 }

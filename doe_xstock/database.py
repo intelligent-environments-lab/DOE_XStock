@@ -27,6 +27,31 @@ class SQLiteDatabase:
         query = f"SELECT * FROM {table_name}"
         return self.query_table(self.__validate_query(query))
 
+    def query(self,query):
+        responses = []
+        conn = self.__get_connection()
+        cur = conn.cursor()
+        
+        try:
+            queries = query.split(';')
+            queries = [q for q in queries if q.strip() != '']
+            
+            for q in queries:
+                cur.execute(self.__validate_query(q))
+                
+                if cur.description is not None:
+                    responses.append(cur.fetchall())
+                else:
+                    pass
+
+                conn.commit()
+               
+        finally:
+            cur.close()
+            conn.close()
+
+        return responses
+
     def query_table(self,query):
         try:
             connection = self.__get_connection()
