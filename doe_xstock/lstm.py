@@ -1,21 +1,21 @@
 import concurrent.futures
+from copy import deepcopy
 import logging
 import logging.config
 import os
 from pathlib import Path
-import uuid
 from eppy.runner.run_functions import EnergyPlusRunError
+from eppy.bunch_subclass import BadEPFieldError
 import numpy as np
 import pandas as pd
-from doe_xstock.database import SQLiteDatabase
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
 from doe_xstock.utilities import read_json
 
-logging_config = read_json(os.path.join(os.path.dirname(__file__),'misc/logging_config.json'))
+logging_config = read_json(os.path.join(os.path.dirname(__file__),Path('misc/logging_config.json')))
 logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_w')
 
-class LSTMData:
+class TrainData:
     def __init__(self,idd_filepath,osm,epw,schedules,ideal_loads=None,edit_ems=None,output_variables=None,iterations=None,max_workers=None,seed=None,**kwargs):
         self.idd_filepath = idd_filepath
         self.osm = osm
@@ -27,10 +27,11 @@ class LSTMData:
         self.iterations = iterations
         self.max_workers = max_workers
         self.seed = seed
-        self.kwargs = kwargs
+        self.__kwargs = kwargs
         self.__simulator = None
-        self.__ideal_loads = None
+        self.__ideal_loads_data = None
         self.__zones = None
+        self.__partial_load_results = None
 
     @property
     def idd_filepath(self):
@@ -123,25 +124,28 @@ class LSTMData:
         LOGGER.info('Started simulation.')
         self.__set_simulator()
         LOGGER.debug('Simulating ideal loads.')
-        # self.__simulate_ideal_loads(**kwargs)
+        self.__simulate_ideal_loads(**kwargs)
         self.__set_zones()
         self.__set_ideal_loads()
         self.__transform_idf()
-        seeds = [None] + [i for i in range(self.iterations)]
+        seeds = [None] + [i + 1 for i in range(self.iterations)]
         simulators = [self.__get_partial_load_simulator(i,seed=s) for i,s in enumerate(seeds)]
-        # Simulator.multi_simulate(simulators,max_workers=self.max_workers)
         LOGGER.debug('Simulating partial load iterations.')
+        Simulator.multi_simulate(simulators,max_workers=self.max_workers)
+        self.__partial_load_results = {}
 
+        LOGGER.debug('Post processing partial load iterations.')
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             results = [executor.submit(self.__post_process_partial_load_simulation,*[s]) for s in simulators]
 
             for _, future in enumerate(concurrent.futures.as_completed(results)):
                 try:
                     r = future.result()
-                    LOGGER.debug(f'finished simulaton_id:{r}')
+                    self.__partial_load_results[r[0]] = deepcopy(r[1])
+                    LOGGER.debug(f'Finished processing simulaton_id:{r[0]}')
                 except Exception as e:
                     LOGGER.exception(e)
-
+        
         LOGGER.info('Ended simulation.')
 
     def __post_process_partial_load_simulation(self,simulator):
@@ -158,13 +162,17 @@ class LSTMData:
         data = simulator.get_database().query_table(query)
         air_system_cooling = data[data['name']=='Zone Air System Sensible Cooling Rate']['value'].iloc[0]
         air_system_heating = data[data['name']=='Zone Air System Sensible Heating Rate']['value'].iloc[0]
-        assert air_system_cooling == 0 and air_system_heating == 0,\
-            f'simulation_id-{simulator.simulation_id}: Non-zero Zone Air System Sensible Cooling Rate'\
-                f' and/or Zone Air System Sensible Heating Rate: ({air_system_cooling, air_system_heating})'
 
+        try:
+            assert air_system_cooling == 0 and air_system_heating == 0
+        except AssertionError:
+            LOGGER.warning(f'simulation_id-{simulator.simulation_id}: Non-zero Zone Air System Sensible Cooling Rate'\
+                f' and/or Zone Air System Sensible Heating Rate: ({air_system_cooling, air_system_heating})')
+            
         # create zone conditioning table
         data = pd.DataFrame([v for _,v in self.__zones.items()])
         query = """
+        DROP TABLE IF EXISTS zone_metadata;
         CREATE TABLE IF NOT EXISTS zone_metadata (
             zone_index INTEGER PRIMARY KEY,
             zone_name TEXT,
@@ -182,89 +190,127 @@ class LSTMData:
         simulator.get_database().query(query)
         simulator.get_database().insert('zone_metadata',data.columns.tolist(),data.values,)
 
-        # # query summary data
-        # query = """
-        # SELECT
-        #     r.TimeIndex,
-        #     'air_temperature' AS label,
-        #     r.Value*z.conditioned_floor_area_proportion AS value
-        # FROM ReportData r
-        # INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-        # INNER JOIN "zone" z ON z.ZoneName = d.KeyValue
-        # WHERE
-        #     (d.Name = 'Zone Air Temperature' AND (z.is_cooled != 0 OR z.is_heated != 0))
-        # """
+        # get simulation summary
+        query = """
+        WITH u AS (
+            -- site variables
+            SELECT
+                r.TimeIndex,
+                r.ReportDataDictionaryIndex,
+                'site_variable' AS label,
+                r.Value
+            FROM ReportData r
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+            WHERE d.Name IN ('Site Direct Solar Radiation Rate per Area', 'Site Outdoor Air Drybulb Temperature')
 
-        return simulator.simulation_id
+            UNION
 
-    def __get_iteration_data(self):
-        zones = self.__zones
-        variable = 'Zone Mean Air Temperature'
-        cooled_zones, heated_zones = self.__get_conditioned_zones()
-        zone_ixs = list(set(cooled_zones + heated_zones))
-        zone_ixs = ','.join(zone_ixs)
-        query = f"""
+            -- weighted conditioned zone variables
+            SELECT
+                r.TimeIndex,
+                r.ReportDataDictionaryIndex,
+                'weighted_variable' AS label,
+                r.Value*z.conditioned_floor_area_proportion AS Value
+            FROM ReportData r
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+            INNER JOIN (SELECT * FROM zone_metadata WHERE is_cooled + is_heated >= 1) z ON z.zone_name = d.KeyValue
+            WHERE d.Name IN ('Zone Air Temperature')
+
+            UNION
+
+            -- thermal load variables
+            SELECT
+                r.TimeIndex,
+                r.ReportDataDictionaryIndex,
+                CASE WHEN r.Value > 0 THEN 'heating_load' ELSE 'cooling_load' END AS label,
+                ABS(r.Value) AS Value
+            FROM ReportData r
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+            WHERE 
+                d.Name = 'Other Equipment Convective Heating Rate' AND
+                (d.KeyValue LIKE '%HEATING LOAD' OR d.KeyValue LIKE '%COOLING LOAD')
+
+            UNION
+
+            -- other variables
+            SELECT
+                r.TimeIndex,
+                r.ReportDataDictionaryIndex,
+                'occupant_count' AS label,
+                r.Value
+            FROM ReportData r
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+            WHERE 
+                d.Name = 'Zone People Occupant Count'
+        ), s AS (
+            SELECT
+                TimeIndex,
+                ReportDataDictionaryIndex,
+                label,
+                SUM(Value) AS Value
+            FROM u
+            GROUP BY
+                TimeIndex,
+                ReportDataDictionaryIndex,
+                label
+        ), p AS (
+            SELECT
+                s.TimeIndex,
+                MAX(CASE WHEN d.Name = 'Site Direct Solar Radiation Rate per Area' THEN Value END) AS direct_solar_radiation,
+                MAX(CASE WHEN d.Name = 'Site Outdoor Air Drybulb Temperature' THEN Value END) AS outdoor_air_temperature,
+                MAX(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS average_indoor_air_temperature,
+                MAX(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS occupant_count,
+                MAX(CASE WHEN s.label = 'cooling_load' THEN Value END) AS cooling_load,
+                MAX(CASE WHEN s.label = 'heating_load' THEN Value END) AS heating_load
+            FROM s
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = s.ReportDataDictionaryIndex
+            GROUP BY TimeIndex
+        )
         SELECT
-            t.Hour AS hour,
-            t.DayType AS day_of_week,
             t.Month AS month,
-            r.Value*z.conditioned_floor_area_proportion AS temperature
-        FROM ReportData r
-        INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-        INNER JOIN Zones z ON z.ZoneName = d.KeyValue
-        INNER JOIN Time t ON t.TimeIndex = r.TimeIndex
-        WHERE d.Name = '{variable}' AND z.ZoneIndex IN ({zone_ixs})
+            t.Day AS day,
+            t.DayType AS day_name,
+            CASE
+                WHEN t.DayType = 'Monday' THEN 1
+                WHEN t.DayType = 'Tuesday' THEN 2
+                WHEN t.DayType = 'Wednesday' THEN 3
+                WHEN t.DayType = 'Thursday' THEN 4
+                WHEN t.DayType = 'Friday' THEN 5
+                WHEN t.DayType = 'Saturday' THEN 6
+                WHEN t.DayType = 'Sunday' THEN 7
+                WHEN t.DayType = 'Holiday' THEN 8
+                ELSE NULL
+            END AS day_of_week,
+            t.Hour AS hour,
+            t.Minute AS minute,
+            p.direct_solar_radiation,
+            p.outdoor_air_temperature,
+            p.average_indoor_air_temperature,
+            p.occupant_count,
+            COALESCE(p.cooling_load, 0) AS cooling_load,
+            COALESCE(p.heating_load, 0) AS heating_load
+        FROM p
+        LEFT JOIN Time t ON t.TimeIndex = p.TimeIndex
+        WHERE t.DayType NOT IN ('SummerDesignDay', 'WinterDesignDay')
         """
-
-    def __set_ideal_loads(self):
-        cooled_zones, heated_zones = self.__get_conditioned_zones()
-        cooled_zone_names = [f'\'{z}\'' for z in cooled_zones]
-        heated_zone_names = [f'\'{z}\'' for z in heated_zones]
-        cooling_column = lambda x: f'{x}.value' if self.ideal_loads else f'CASE WHEN {x}.Value > 0 THEN 0 ELSE r.Value END'
-        heating_column = lambda x: f'{x}.value' if self.ideal_loads else f'CASE WHEN {x}.Value < 0 THEN 0 ELSE r.Value END'
-        cooling_variable = 'Zone Ideal Loads Zone Sensible Cooling Rate' if self.ideal_loads else 'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate'
-        heating_variable = 'Zone Ideal Loads Zone Sensible Heating Rate' if self.ideal_loads else cooling_variable
-        zone_join_query = lambda x: f"REPLACE({x}.KeyValue, ' IDEAL LOADS AIR SYSTEM', '')" if self.ideal_loads else f'{x}.KeyValue'
-        query = f"""
-        SELECT
-            r.TimeIndex AS timestep,
-            'cooling' AS load,
-            z.ZoneIndex AS zone_index,
-            z.ZoneName AS zone_name,
-            {cooling_column('r')} AS value
-        FROM ReportData r
-        INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-        LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
-        WHERE d.Name = '{cooling_variable}' AND z.ZoneName IN ({','.join(cooled_zone_names)})
-        UNION
-        SELECT
-            r.TimeIndex AS timestep,
-            'heating' AS load,
-            z.ZoneIndex AS zone_index,
-            z.ZoneName AS zone_name,
-            {heating_column('r')} AS value
-        FROM ReportData r
-        INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-        LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
-        WHERE d.Name = '{heating_variable}' AND z.ZoneName IN ({','.join(heated_zone_names)})
-        """
-        data = self.__simulator.get_database().query_table(query)
-        data = data.pivot(index=['zone_name','zone_index','timestep'],columns='load',values='value')
-        data = data.reset_index(drop=False).to_dict(orient='list')
-        data.pop('index',None)
-        self.__ideal_loads = data
+        data = simulator.get_database().query_table(query)
+        data = data.to_dict('list')
+        _ = data.pop('index',None)
+        
+        return simulator.simulation_id, data
 
     def __get_partial_load_simulator(self,uid,seed=None):
         # get multiplier
-        size = len(self.__ideal_loads['timestep'])
+        size = len(self.__ideal_loads_data['timestep'])
         multiplier = [1]*size if seed is None else self.get_multipliers(size,seed=self.seed*seed)
         multiplier = pd.DataFrame(multiplier,columns=['multiplier'])
         multiplier['timestep'] = multiplier.index + 1
 
         # set load schedule file
-        data = pd.DataFrame(self.__ideal_loads)
+        data = pd.DataFrame(self.__ideal_loads_data)
         data = data.merge(multiplier,on='timestep',how='left')
-        data['cooling'] *= data['multiplier']
+        data = data.sort_values(['zone_name','timestep'])
+        data['cooling'] *= data['multiplier']*-1
         data['heating'] *= data['multiplier']
 
         # save load schedule file
@@ -283,44 +329,49 @@ class LSTMData:
             else:
                 continue
 
-        # simulate
-        return Simulator(
-            self.idd_filepath,
-            idf.idfstr(),
-            self.epw,
-            simulation_id=simulation_id,
-            output_directory=output_directory,
-        )
+        return Simulator(self.idd_filepath,idf.idfstr(),self.epw,simulation_id=simulation_id,output_directory=output_directory)
     
     def __transform_idf(self):
         # generate idf for simulations with partial loads
         idf = self.__simulator.get_idf_object()
 
         # remove Ideal Air Loads System if any
-        idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem'] = []
+        if self.ideal_loads:
+            idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem'] = []
+            obj_names = [
+                'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort',
+                'ZoneControl:Thermostat:OperativeTemperature','ZoneControl:Thermostat:TemperatureAndHumidity','ZoneControl:Thermostat:StagedDualSetpoint'
+            ]
 
-        # set hvac equipment availability to always off
-        obj_names = [n.upper() for n in [
-            'AirTerminal:SingleDuct:Uncontrolled','Fan:ZoneExhaust','WaterHeater:HeatPump','ZoneHVAC:Baseboard:Convective:Electric','ZoneHVAC:Baseboard:Convective:Water','ZoneHVAC:Baseboard:RadiantConvective:Electric','ZoneHVAC:Baseboard:RadiantConvective:Water',
-            'ZoneHVAC:Baseboard:RadiantConvective:Steam','ZoneHVAC:Dehumidifier:DX','ZoneHVAC:EnergyRecoveryVentilator','ZoneHVAC:FourPipeFanCoil',
-            'ZoneHVAC:HighTemperatureRadiant','ZoneHVAC:LowTemperatureRadiant:ConstantFlow','ZoneHVAC:LowTemperatureRadiant:Electric',
-            'ZoneHVAC:LowTemperatureRadiant:VariableFlow','ZoneHVAC:OutdoorAirUnit','ZoneHVAC:PackagedTerminalAirConditioner',
-            'ZoneHVAC:PackagedTerminalHeatPump','ZoneHVAC:RefrigerationChillerSet','ZoneHVAC:UnitHeater','ZoneHVAC:UnitVentilator',
-            'ZoneHVAC:WindowAirConditioner','ZoneHVAC:WaterToAirHeatPump','ZoneHVAC:VentilatedSlab',
-            'AirTerminal:DualDuct:ConstantVolume','AirTerminal:DualDuct:VAV','AirTerminal:DualDuct:VAV:OutdoorAir',
-            'AirTerminal:SingleDuct:ConstantVolume:Reheat','AirTerminal:SingleDuct:VAV:Reheat','AirTerminal:SingleDuct:VAV:NoReheat',
-            'AirTerminal:SingleDuct:SeriesPIU:Reheat','AirTerminal:SingleDuct:ParallelPIU:Reheat'
-            'AirTerminal:SingleDuct:ConstantVolume:FourPipeInduction','AirTerminal:SingleDuct:VAV:Reheat:VariableSpeedFan',
-            'AirTerminal:SingleDuct:VAV:HeatAndCool:Reheat','AirTerminal:SingleDuct:VAV:HeatAndCool:NoReheat',
-            'AirLoopHVAC:UnitarySystem'
-        ]]
+            for name in obj_names:
+                idf.idfobjects[name] = []
+        else:
+            # set hvac equipment availability to always off
+            obj_names = [n.upper() for n in [
+                'AirTerminal:SingleDuct:Uncontrolled','Fan:ZoneExhaust','ZoneHVAC:Baseboard:Convective:Electric','ZoneHVAC:Baseboard:Convective:Water','ZoneHVAC:Baseboard:RadiantConvective:Electric','ZoneHVAC:Baseboard:RadiantConvective:Water',
+                'ZoneHVAC:Baseboard:RadiantConvective:Steam','ZoneHVAC:Dehumidifier:DX','ZoneHVAC:EnergyRecoveryVentilator','ZoneHVAC:FourPipeFanCoil',
+                'ZoneHVAC:HighTemperatureRadiant','ZoneHVAC:LowTemperatureRadiant:ConstantFlow','ZoneHVAC:LowTemperatureRadiant:Electric',
+                'ZoneHVAC:LowTemperatureRadiant:VariableFlow','ZoneHVAC:OutdoorAirUnit','ZoneHVAC:PackagedTerminalAirConditioner',
+                'ZoneHVAC:PackagedTerminalHeatPump','ZoneHVAC:RefrigerationChillerSet','ZoneHVAC:UnitHeater','ZoneHVAC:UnitVentilator',
+                'ZoneHVAC:WindowAirConditioner','ZoneHVAC:WaterToAirHeatPump','ZoneHVAC:VentilatedSlab',
+                'AirTerminal:DualDuct:ConstantVolume','AirTerminal:DualDuct:VAV','AirTerminal:DualDuct:VAV:OutdoorAir',
+                'AirTerminal:SingleDuct:ConstantVolume:Reheat','AirTerminal:SingleDuct:VAV:Reheat','AirTerminal:SingleDuct:VAV:NoReheat',
+                'AirTerminal:SingleDuct:SeriesPIU:Reheat','AirTerminal:SingleDuct:ParallelPIU:Reheat'
+                'AirTerminal:SingleDuct:ConstantVolume:FourPipeInduction','AirTerminal:SingleDuct:VAV:Reheat:VariableSpeedFan',
+                'AirTerminal:SingleDuct:VAV:HeatAndCool:Reheat','AirTerminal:SingleDuct:VAV:HeatAndCool:NoReheat',
+                'AirLoopHVAC:UnitarySystem','ZoneHVAC:IdealLoadsAirSystem','HVACTemplate:Zone:IdealLoadsAirSystem'
+            ]]
+            schedule_name = 'Always Off Discrete'
 
-        for name in obj_names:
-            if name in idf.idfobjects.keys():
-                for obj in idf.idfobjects[name]:
-                    obj.Availability_Schedule_Name = 'Always Off Discrete'
-            else:
-                continue
+            for name in obj_names:
+                if name in idf.idfobjects.keys():
+                    for obj in idf.idfobjects[name]:
+                        try:
+                            obj.Availability_Schedule_Name = schedule_name
+                        except BadEPFieldError:
+                            obj.System_Availability_Schedule_Name = schedule_name
+                else:
+                    continue
 
         # schedule type limit object
         schedule_type_limit_name = 'other equipment hvac power'
@@ -332,8 +383,8 @@ class LSTMData:
         obj.Unit_Type = 'Dimensionless'
 
         # generate stochastic thermal load
-        zone_names = set(self.__ideal_loads['zone_name'])
-        timesteps = max(self.__ideal_loads['timestep'])
+        zone_names = set(self.__ideal_loads_data['zone_name'])
+        timesteps = max(self.__ideal_loads_data['timestep'])
         loads = ['cooling','heating']
         
         for i, zone_name in enumerate(zone_names):
@@ -356,7 +407,7 @@ class LSTMData:
                 obj.Zone_or_ZoneList_or_Space_or_SpaceList_Name = zone_name
                 obj.Schedule_Name = schedule_object_name
                 obj.Design_Level_Calculation_Method = 'EquipmentLevel'
-                obj.Design_Level = 1.0 
+                obj.Design_Level = 1.0
                 obj.Fraction_Latent = 0.0
                 obj.Fraction_Radiant = 0.0
                 obj.Fraction_Lost = 0.0
@@ -369,6 +420,44 @@ class LSTMData:
         schedule = np.random.uniform(minimum_value,maximum_value,size)
         schedule[np.random.random(size) > probability] = 1
         return schedule.tolist()
+
+    def __set_ideal_loads(self):
+        cooled_zones, heated_zones = self.__get_conditioned_zones()
+        cooled_zone_names = [f'\'{z}\'' for z in cooled_zones]
+        heated_zone_names = [f'\'{z}\'' for z in heated_zones]
+        cooling_column = lambda x: f'{x}.value' if self.ideal_loads else f'CASE WHEN {x}.Value > 0 THEN 0 ELSE r.Value END'
+        heating_column = lambda x: f'{x}.value' if self.ideal_loads else f'CASE WHEN {x}.Value < 0 THEN 0 ELSE r.Value END'
+        cooling_variable = 'Zone Ideal Loads Zone Sensible Cooling Rate' if self.ideal_loads else 'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate'
+        heating_variable = 'Zone Ideal Loads Zone Sensible Heating Rate' if self.ideal_loads else cooling_variable
+        zone_join_query = lambda x: f"REPLACE({x}.KeyValue, ' IDEAL LOADS AIR SYSTEM', '')" if self.ideal_loads else f'{x}.KeyValue'
+        query = f"""
+        SELECT
+            r.TimeIndex AS timestep,
+            'cooling' AS load,
+            z.ZoneIndex AS zone_index,
+            z.ZoneName AS zone_name,
+            ABS({cooling_column('r')}) AS value
+        FROM ReportData r
+        INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+        LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
+        WHERE d.Name = '{cooling_variable}' AND z.ZoneName IN ({','.join(cooled_zone_names)})
+        UNION
+        SELECT
+            r.TimeIndex AS timestep,
+            'heating' AS load,
+            z.ZoneIndex AS zone_index,
+            z.ZoneName AS zone_name,
+            ABS({heating_column('r')}) AS value
+        FROM ReportData r
+        INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+        LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
+        WHERE d.Name = '{heating_variable}' AND z.ZoneName IN ({','.join(heated_zone_names)})
+        """
+        data = self.__simulator.get_database().query_table(query)
+        data = data.pivot(index=['zone_name','zone_index','timestep'],columns='load',values='value')
+        data = data.reset_index(drop=False).to_dict(orient='list')
+        data.pop('index',None)
+        self.__ideal_loads_data = data
 
     def __get_conditioned_zones(self):
         cooled_zones = [k for k,v in self.__zones.items() if v['is_cooled']==1]
@@ -428,41 +517,38 @@ class LSTMData:
         self.__zones = {z['zone_name']:z for z in data.to_dict('records')}
 
     def __simulate_ideal_loads(self,**kwargs):
-        if self.ideal_loads and self.__initial_simulation:
-            self.__simulate_ideal_loads(**kwargs)
-        else:
-            found_objs = True
+        found_objs = True
 
-            while True:
-                removed_objs = {}
-                edited_objs = {}
+        while True:
+            removed_objs = {}
+            edited_objs = {}
 
-                try:
-                    self.__simulator.simulate()
-                    break
+            try:
+                self.__simulator.simulate()
+                break
 
-                except EnergyPlusRunError as e:
-                    if (self.__simulator.has_ems_input_error() or self.__simulator.has_ems_program_error()) and found_objs:
-                        try:
-                            removed_objs = {
-                                **self.__simulator.remove_ems_objs_in_error(patterns=kwargs.get('patterns',None)),
-                                **(self.__simulator.remove_ems_program_objs_in_line_error() if not self.edit_ems else {}),
-                            }
-                            edited_objs = {
-                                **(self.__simulator.redefine_ems_program_in_line_error() if self.edit_ems else {})
-                            }
-                            found_objs = len(removed_objs) + len(edited_objs) == 0
-                            LOGGER.debug(f'Removed objs: {removed_objs}')
-                            LOGGER.debug(f'Edited objs: {edited_objs}')
-                            LOGGER.debug('Rerunning sim.')
+            except EnergyPlusRunError as e:
+                if self.ideal_loads and (self.__simulator.has_ems_input_error() or self.__simulator.has_ems_program_error()) and found_objs:
+                    try:
+                        removed_objs = self.__simulator.remove_ems_objs_in_error(patterns=kwargs.get('patterns',None))
                         
-                        except Exception as e:
-                            LOGGER.exception(e)
-                            raise e
+                        if self.edit_ems:
+                            edited_objs = self.__simulator.redefine_ems_program_in_line_error()
+                        else:
+                            removed_objs = {**removed_objs,**self.__simulator.remove_ems_program_objs_in_line_error()}
+
+                        found_objs = len(removed_objs) + len(edited_objs) > 0
+                        LOGGER.debug(f'Removed objs: {removed_objs}')
+                        LOGGER.debug(f'Edited objs: {edited_objs}')
+                        LOGGER.debug('Rerunning sim.')
                     
-                    else:
+                    except Exception as e:
                         LOGGER.exception(e)
                         raise e
+                
+                else:
+                    LOGGER.exception(e)
+                    raise e
 
     def __set_simulator(self):
         osm_editor = OpenStudioModelEditor(self.osm)
@@ -476,8 +562,8 @@ class LSTMData:
             self.idd_filepath,
             osm_editor.forward_translate(),
             self.epw,
-            simulation_id=self.kwargs.get('simulation_id',None),
-            output_directory=self.kwargs.get('output_directory',None)
+            simulation_id=self.__kwargs.get('simulation_id',None),
+            output_directory=self.__kwargs.get('output_directory',None)
         )
         self.__preprocess_idf()
        
@@ -502,7 +588,7 @@ class LSTMData:
         pd.DataFrame(self.schedules).to_csv(schedules_filepath,index=False)
 
         for obj in idf.idfobjects['Schedule:File']:
-            if obj.Name in self.schedules.keys():
+            if obj.Name.lower() in self.schedules.keys():
                 obj.File_Name = schedules_filepath
             else:
                 continue

@@ -172,7 +172,10 @@ class Simulator:
         idf.run(**run_kwargs)
 
     def remove_ems_objs_in_error(self,patterns=None):
-        default_patterns = [r'EnergyManagementSystem:Sensor=\S+',r'EnergyManagementSystem:ProgramCallingManager=.+\s+']
+        default_patterns = [
+            r'EnergyManagementSystem:Sensor=\S+',
+            # r'EnergyManagementSystem:ProgramCallingManager=.+\s+'
+        ]
         patterns = default_patterns if patterns is None else patterns
         objs = {}
         removed_objs = {}
