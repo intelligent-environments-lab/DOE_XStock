@@ -13,15 +13,15 @@ from doe_xstock.utilities import read_json
 
 logging_config = read_json(os.path.join(os.path.dirname(__file__),Path('misc/logging_config.json')))
 logging.config.dictConfig(logging_config)
-LOGGER = logging.getLogger('doe_xstock_w')
+LOGGER = logging.getLogger('doe_xstock_a')
 
 class TrainData:
-    def __init__(self,idd_filepath,osm,epw,schedules,ideal_loads=None,edit_ems=None,output_variables=None,iterations=None,max_workers=None,seed=None,**kwargs):
+    def __init__(self,idd_filepath,osm,epw,schedules,ideal_loads_air_system=None,edit_ems=None,output_variables=None,iterations=None,max_workers=None,seed=None,**kwargs):
         self.idd_filepath = idd_filepath
         self.osm = osm
         self.epw = epw
         self.schedules = schedules
-        self.ideal_loads = ideal_loads
+        self.ideal_loads_air_system = ideal_loads_air_system
         self.edit_ems = edit_ems
         self.output_variables = output_variables
         self.iterations = iterations
@@ -31,7 +31,7 @@ class TrainData:
         self.__simulator = None
         self.__ideal_loads_data = None
         self.__zones = None
-        self.__partial_load_results = None
+        self.__partial_loads_data = None
 
     @property
     def idd_filepath(self):
@@ -50,8 +50,8 @@ class TrainData:
         return self.__schedules
 
     @property
-    def ideal_loads(self):
-        return self.__ideal_loads
+    def ideal_loads_air_system(self):
+        return self.__ideal_loads_air_system
 
     @property
     def edit_ems(self):
@@ -89,9 +89,9 @@ class TrainData:
     def schedules(self, schedules):
         self.__schedules = schedules
 
-    @ideal_loads.setter
-    def ideal_loads(self,ideal_loads):
-        self.__ideal_loads = False if ideal_loads is None else ideal_loads
+    @ideal_loads_air_system.setter
+    def ideal_loads_air_system(self,ideal_loads_air_system):
+        self.__ideal_loads_air_system = False if ideal_loads_air_system is None else ideal_loads_air_system
     
     @edit_ems.setter
     def edit_ems(self,edit_ems):
@@ -120,19 +120,15 @@ class TrainData:
     def seed(self,seed):
         self.__seed = 0 if seed is None else seed
 
-    def run(self,**kwargs):
+    def simulate_partial_loads(self,**kwargs):
         LOGGER.info('Started simulation.')
-        self.__set_simulator()
-        LOGGER.debug('Simulating ideal loads.')
-        self.__simulate_ideal_loads(**kwargs)
-        self.__set_zones()
-        self.__set_ideal_loads()
+        self.__set_ideal_loads(**kwargs)
         self.__transform_idf()
         seeds = [None] + [i + 1 for i in range(self.iterations)]
         simulators = [self.__get_partial_load_simulator(i,seed=s) for i,s in enumerate(seeds)]
         LOGGER.debug('Simulating partial load iterations.')
         Simulator.multi_simulate(simulators,max_workers=self.max_workers)
-        self.__partial_load_results = {}
+        self.__partial_loads_data = {}
 
         LOGGER.debug('Post processing partial load iterations.')
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -141,12 +137,13 @@ class TrainData:
             for _, future in enumerate(concurrent.futures.as_completed(results)):
                 try:
                     r = future.result()
-                    self.__partial_load_results[r[0]] = deepcopy(r[1])
+                    self.__partial_loads_data[r[0]] = deepcopy(r[1])
                     LOGGER.debug(f'Finished processing simulaton_id:{r[0]}')
                 except Exception as e:
                     LOGGER.exception(e)
         
         LOGGER.info('Ended simulation.')
+        return self.__partial_loads_data
 
     def __post_process_partial_load_simulation(self,simulator):
         # check that air system cooling and heating loads are 0
@@ -170,25 +167,7 @@ class TrainData:
                 f' and/or Zone Air System Sensible Heating Rate: ({air_system_cooling, air_system_heating})')
             
         # create zone conditioning table
-        data = pd.DataFrame([v for _,v in self.__zones.items()])
-        query = """
-        DROP TABLE IF EXISTS zone_metadata;
-        CREATE TABLE IF NOT EXISTS zone_metadata (
-            zone_index INTEGER PRIMARY KEY,
-            zone_name TEXT,
-            multiplier REAL,
-            volume REAL,
-            floor_area REAL,
-            total_floor_area_proportion REAL,
-            conditioned_floor_area_proportion REAL,
-            is_cooled INTEGER,
-            is_heated INTEGER,
-            average_cooling_setpoint REAL,
-            average_heating_setpoint REAL
-        );
-        """
-        simulator.get_database().query(query)
-        simulator.get_database().insert('zone_metadata',data.columns.tolist(),data.values,)
+        self.__insert_zone_metadata(simulator)
 
         # get simulation summary
         query = """
@@ -210,10 +189,9 @@ class TrainData:
                 r.TimeIndex,
                 r.ReportDataDictionaryIndex,
                 'weighted_variable' AS label,
-                r.Value*z.conditioned_floor_area_proportion AS Value
-            FROM ReportData r
+                r.Value
+            FROM weighted_variable r
             LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-            INNER JOIN (SELECT * FROM zone_metadata WHERE is_cooled + is_heated >= 1) z ON z.zone_name = d.KeyValue
             WHERE d.Name IN ('Zone Air Temperature')
 
             UNION
@@ -267,6 +245,7 @@ class TrainData:
             GROUP BY TimeIndex
         )
         SELECT
+            t.TimeIndex AS timestep,
             t.Month AS month,
             t.Day AS day,
             t.DayType AS day_name,
@@ -301,13 +280,13 @@ class TrainData:
 
     def __get_partial_load_simulator(self,uid,seed=None):
         # get multiplier
-        size = len(self.__ideal_loads_data['timestep'])
+        size = len(self.__ideal_loads_data['load']['timestep'])
         multiplier = [1]*size if seed is None else self.get_multipliers(size,seed=self.seed*seed)
         multiplier = pd.DataFrame(multiplier,columns=['multiplier'])
         multiplier['timestep'] = multiplier.index + 1
 
         # set load schedule file
-        data = pd.DataFrame(self.__ideal_loads_data)
+        data = pd.DataFrame(self.__ideal_loads_data['load'])
         data = data.merge(multiplier,on='timestep',how='left')
         data = data.sort_values(['zone_name','timestep'])
         data['cooling'] *= data['multiplier']*-1
@@ -336,7 +315,7 @@ class TrainData:
         idf = self.__simulator.get_idf_object()
 
         # remove Ideal Air Loads System if any
-        if self.ideal_loads:
+        if self.ideal_loads_air_system:
             idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem'] = []
             obj_names = [
                 'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort',
@@ -383,8 +362,8 @@ class TrainData:
         obj.Unit_Type = 'Dimensionless'
 
         # generate stochastic thermal load
-        zone_names = set(self.__ideal_loads_data['zone_name'])
-        timesteps = max(self.__ideal_loads_data['timestep'])
+        zone_names = set(self.__ideal_loads_data['load']['zone_name'])
+        timesteps = max(self.__ideal_loads_data['load']['timestep'])
         loads = ['cooling','heating']
         
         for i, zone_name in enumerate(zone_names):
@@ -421,15 +400,30 @@ class TrainData:
         schedule[np.random.random(size) > probability] = 1
         return schedule.tolist()
 
-    def __set_ideal_loads(self):
+    def get_ideal_loads_data(self,**kwargs):
+        self.__set_ideal_loads(**kwargs)
+        return self.__ideal_loads_data
+
+    def __set_ideal_loads(self,**kwargs):
+        LOGGER.debug('Simulating ideal loads.')
+        self.__set_simulator()
+        self.__simulate_ideal_loads(**kwargs)
+        self.__set_zones()
+        self.__set_ideal_loads_data()
+        LOGGER.debug('Finished simulating ideal loads.')
+
+    def __set_ideal_loads_data(self):
+        ideal_loads_data = {}
+
+        # cooling and heating loads
         cooled_zones, heated_zones = self.__get_conditioned_zones()
         cooled_zone_names = [f'\'{z}\'' for z in cooled_zones]
         heated_zone_names = [f'\'{z}\'' for z in heated_zones]
-        cooling_column = lambda x: f'{x}.value' if self.ideal_loads else f'CASE WHEN {x}.Value > 0 THEN 0 ELSE r.Value END'
-        heating_column = lambda x: f'{x}.value' if self.ideal_loads else f'CASE WHEN {x}.Value < 0 THEN 0 ELSE r.Value END'
-        cooling_variable = 'Zone Ideal Loads Zone Sensible Cooling Rate' if self.ideal_loads else 'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate'
-        heating_variable = 'Zone Ideal Loads Zone Sensible Heating Rate' if self.ideal_loads else cooling_variable
-        zone_join_query = lambda x: f"REPLACE({x}.KeyValue, ' IDEAL LOADS AIR SYSTEM', '')" if self.ideal_loads else f'{x}.KeyValue'
+        cooling_column = lambda x: f'{x}.value' if self.ideal_loads_air_system else f'CASE WHEN {x}.Value > 0 THEN 0 ELSE r.Value END'
+        heating_column = lambda x: f'{x}.value' if self.ideal_loads_air_system else f'CASE WHEN {x}.Value < 0 THEN 0 ELSE r.Value END'
+        cooling_variable = 'Zone Ideal Loads Zone Sensible Cooling Rate' if self.ideal_loads_air_system else 'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate'
+        heating_variable = 'Zone Ideal Loads Zone Sensible Heating Rate' if self.ideal_loads_air_system else cooling_variable
+        zone_join_query = lambda x: f"REPLACE({x}.KeyValue, ' IDEAL LOADS AIR SYSTEM', '')" if self.ideal_loads_air_system else f'{x}.KeyValue'
         query = f"""
         SELECT
             r.TimeIndex AS timestep,
@@ -457,12 +451,62 @@ class TrainData:
         data = data.pivot(index=['zone_name','zone_index','timestep'],columns='load',values='value')
         data = data.reset_index(drop=False).to_dict(orient='list')
         data.pop('index',None)
-        self.__ideal_loads_data = data
+        ideal_loads_data['load'] = deepcopy(data)
+
+        # weighted average indoor dry-bulb temperature
+        query = """
+        SELECT
+            r.TimeIndex AS timestep,
+            SUM(r.Value) AS value
+        FROM weighted_variable r
+        LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+        WHERE d.Name IN ('Zone Air Temperature')
+        GROUP BY r.TimeIndex
+        """
+        self.__insert_zone_metadata(self.__simulator)
+        data = self.__simulator.get_database().query_table(query).to_dict(orient='list')
+        data.pop('index',None)
+        ideal_loads_data['temperature'] = deepcopy(data)
+        
+        self.__ideal_loads_data = ideal_loads_data
 
     def __get_conditioned_zones(self):
         cooled_zones = [k for k,v in self.__zones.items() if v['is_cooled']==1]
         heated_zones = [k for k,v in self.__zones.items() if v['is_heated']==1]
         return cooled_zones, heated_zones
+
+    def __insert_zone_metadata(self,simulator):
+        data = pd.DataFrame([v for _,v in self.__zones.items()])
+        query = """
+        DROP TABLE IF EXISTS zone_metadata;
+        CREATE TABLE IF NOT EXISTS zone_metadata (
+            zone_index INTEGER PRIMARY KEY,
+            zone_name TEXT,
+            multiplier REAL,
+            volume REAL,
+            floor_area REAL,
+            total_floor_area_proportion REAL,
+            conditioned_floor_area_proportion REAL,
+            is_cooled INTEGER,
+            is_heated INTEGER,
+            average_cooling_setpoint REAL,
+            average_heating_setpoint REAL
+        );
+
+        DROP VIEW IF EXISTS weighted_variable;
+        CREATE VIEW weighted_variable AS
+            SELECT
+                r.TimeIndex,
+                r.ReportDataDictionaryIndex,
+                r.Value*z.conditioned_floor_area_proportion AS Value
+            FROM ReportData r
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+            INNER JOIN (SELECT * FROM zone_metadata WHERE is_cooled + is_heated >= 1) z ON z.zone_name = d.KeyValue
+            WHERE d.Name IN ('Zone Air Temperature')
+        ;
+        """
+        simulator.get_database().query(query)
+        simulator.get_database().insert('zone_metadata',data.columns.tolist(),data.values,)
 
     def __set_zones(self):
         query = """
@@ -528,7 +572,7 @@ class TrainData:
                 break
 
             except EnergyPlusRunError as e:
-                if self.ideal_loads and (self.__simulator.has_ems_input_error() or self.__simulator.has_ems_program_error()) and found_objs:
+                if self.ideal_loads_air_system and (self.__simulator.has_ems_input_error() or self.__simulator.has_ems_program_error()) and found_objs:
                     try:
                         removed_objs = self.__simulator.remove_ems_objs_in_error(patterns=kwargs.get('patterns',None))
                         
@@ -553,7 +597,7 @@ class TrainData:
     def __set_simulator(self):
         osm_editor = OpenStudioModelEditor(self.osm)
 
-        if self.ideal_loads:
+        if self.ideal_loads_air_system:
             osm_editor.use_ideal_loads_air_system()
         else:
             pass
@@ -594,7 +638,7 @@ class TrainData:
                 continue
         
         # set ideal loads to satisfy solely sensible load
-        if self.ideal_loads:
+        if self.ideal_loads_air_system:
             for obj in idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem']:
                 obj.Dehumidification_Control_Type = 'None'
                 obj.Cooling_Sensible_Heat_Ratio = 1.0
