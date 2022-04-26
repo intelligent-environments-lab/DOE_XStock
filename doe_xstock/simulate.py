@@ -204,7 +204,7 @@ class Simulator:
                 current_line = o[f'Program_Line_{l}']
 
                 if current_line.startswith('Set'):
-                    o[f'Program_Line_{l}'] = f'Set {k.lower()} = 0'
+                    o[f'Program_Line_{l}'] = f'{current_line.split("=")[0]} = 0'
                 elif current_line.startswith('If'):
                     o[f'Program_Line_{l}'] = f'If 1<0'
                 else:

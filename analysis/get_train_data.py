@@ -15,7 +15,7 @@ def main():
     neighbourhood = read_json(neighbourhood_filepath)
     database = SQLiteDatabase(database_filepath)
     iterations = 4
-    max_workers = min(iterations,5)
+    max_workers = iterations + 1
 
     # create table to output results to
     database.query("""
