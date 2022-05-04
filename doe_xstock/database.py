@@ -164,6 +164,19 @@ class SQLiteDatabase:
         finally:
             connection.close()
 
+    def insert_batch(self,query_list,values_list):
+        conn = self.__get_connection()
+
+        try:
+            for query, values in zip(query_list, values_list):
+                query = self.__validate_query(query)
+                _ = conn.executemany(query,values)
+            
+            conn.commit()
+            
+        finally:
+            conn.close()
+
     def __register_adapter(self):
         sqlite3.register_adapter(np.int64,lambda x: int(x))
         sqlite3.register_adapter(np.int32,lambda x: int(x))
