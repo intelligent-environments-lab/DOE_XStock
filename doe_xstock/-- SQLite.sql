@@ -1,0 +1,37 @@
+-- SQLite
+-- SELECT
+--     dataset_id,
+--     in_resstock_county_id,
+--     COUNT(in_resstock_county_id) AS count
+-- FROM metadata
+-- WHERE (in_resstock_county_id LIKE 'VT%' OR in_resstock_county_id LIKE 'CA%')
+-- AND in_geometry_building_type_recs = 'Single-Family Detached'
+-- AND in_vacancy_status = 'Occupied'
+-- AND in_vintage != '<1940'
+-- GROUP BY in_resstock_county_id
+-- ;
+
+-- DROP TABLE IF EXISTS metadata_clustering;
+-- DROP TABLE  IF EXISTS metadata_clustering_label;
+-- DROP TABLE  IF EXISTS metadata_clustering_name;
+-- DROP TABLE  IF EXISTS optimal_metadata_clustering;
+-- DELETE FROM optimal_metadata_clustering;
+-- INSERT INTO optimal_metadata_clustering (name_id, clustering_id)
+-- VALUES
+--     (
+--         (SELECT id FROM metadata_clustering_name WHERE name = 'alameda_county'),
+--         (SELECT id FROM metadata_clustering WHERE n_clusters = 5 AND name_id = (SELECT id FROM metadata_clustering_name WHERE name = 'alameda_county'))
+--     ),
+--     (
+--         (SELECT id FROM metadata_clustering_name WHERE name = 'chittenden_county'),
+--         (SELECT id FROM metadata_clustering WHERE n_clusters = 5 AND name_id = (SELECT id FROM metadata_clustering_name WHERE name = 'chittenden_county'))
+--     ),
+--     (
+--         (SELECT id FROM metadata_clustering_name WHERE name = 'travis_county'),
+--         (SELECT id FROM metadata_clustering WHERE n_clusters = 6 AND name_id = (SELECT id FROM metadata_clustering_name WHERE name = 'travis_county'))
+--     )
+-- ;
+-- VT, Chittenden County
+
+-- geometry_building_type_recs":["Single-Family Detached"],
+--     "in.vacancy_status":["Occupied"],
