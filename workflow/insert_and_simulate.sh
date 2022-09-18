@@ -3,7 +3,7 @@
 DATABASE_FILEPATH="/Users/kingsleyenweye/Desktop/INTELLIGENT_ENVIRONMENT_LAB/doe_xstock/database.db"
 LOGGING_CONFIG_FILEPATH="/Users/kingsleyenweye/Desktop/INTELLIGENT_ENVIRONMENT_LAB/doe_xstock/doe_xstock/doe_xstock/misc/logging_config.json"
 INSERT_DATASET_TYPE="resstock"
-INSERT_WEATHER_DATA="tmy3"
+INSERT_WEATHER_DATA="amy2018"
 INSERT_YEAR_OF_PUBLICATION="2021"
 INSERT_RELEASE="1"
 INSERT_FILTERS_FILEPATH="/Users/kingsleyenweye/Desktop/INTELLIGENT_ENVIRONMENT_LAB/doe_xstock/doe_xstock/workflow/insert_filters.json"
