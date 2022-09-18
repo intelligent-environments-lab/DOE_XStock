@@ -2,11 +2,9 @@ import os
 from pathlib import Path
 import sys
 sys.path.insert(0,'../')
-import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import pandas as pd
 from doe_xstock.database import SQLiteDatabase
-from doe_xstock.doe_xstock import DOEXStockDatabase
 from doe_xstock.exploration import MetadataClustering
 
 plt.rcParams['axes.xmargin'] = 0
