@@ -25,7 +25,7 @@ def main():
     # dataset
     subparser_dataset = subparsers.add_parser('dataset',description='Database dataset operations.')
     subparser_dataset.add_argument('dataset_type',type=str,choices=['resstock'],help='Residential or commercial building stock dataset.')
-    subparser_dataset.add_argument('weather_data',type=str,choices=['tmy3'],help='Weather file used in dataset simulation.')
+    subparser_dataset.add_argument('weather_data',type=str,choices=['tmy3','amy2018'],help='Weather file used in dataset simulation.')
     subparser_dataset.add_argument('year_of_publication',type=int,choices=[2021],help='Year dataset was published.')
     subparser_dataset.add_argument('release',type=int,choices=[1],help='Dataset release version.')
     dataset_subparsers = subparser_dataset.add_subparsers(title='subcommands',required=True,dest='subcommands')
