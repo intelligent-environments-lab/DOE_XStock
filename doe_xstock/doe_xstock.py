@@ -1,3 +1,4 @@
+from datetime import timedelta
 from enum import Enum
 import gzip
 import io
@@ -6,10 +7,12 @@ import logging.config
 import os
 from bs4 import BeautifulSoup
 import pandas as pd
+import psychrolib
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import urllib3
+from doe_xstock.data import MeteostatWeather
 from doe_xstock.database import SQLiteDatabase
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
 from doe_xstock.utilities import read_json, write_data
@@ -134,7 +137,7 @@ class DOEXStockDatabase(SQLiteDatabase):
             LOGGER.info(f'Updating spatial_tract table.')
             self.update_spatial_tract_table(dataset,dataset_id,buildings)
             LOGGER.info(f'Updating weather table.')
-            self.update_weather_table(dataset_id,buildings)
+            self.update_weather_table(dataset_id,dataset,buildings)
             LOGGER.info(f'Updating timeseries table.')
             self.update_timeseries_table(dataset,buildings)
             LOGGER.info(f'Updating model table.')
@@ -249,7 +252,7 @@ class DOEXStockDatabase(SQLiteDatabase):
             ['dataset_id','nhgis_tract_gisjoin']
         )
 
-    def update_weather_table(self,dataset_id,buildings):
+    def update_weather_table(self,dataset_id,dataset,buildings):
         tmy3 = self.download_energyplus_weather_metadata()
         tmy3 = tmy3[tmy3['provider']=='TMY3'].copy()
         tmy3[['longitude','latitude']] = tmy3[['longitude','latitude']].astype(str)
@@ -259,7 +262,7 @@ class DOEXStockDatabase(SQLiteDatabase):
             'title':'energyplus_title',
         })
         buildings = buildings.groupby(
-            ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3']
+            ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3','in_nhgis_county_gisjoin']
         ).size().reset_index().iloc[:,0:-1]
         buildings = pd.merge(buildings,tmy3,on=['in_weather_file_latitude','in_weather_file_longitude'],how='left')
         buildings['count'] = 1
@@ -291,9 +294,16 @@ class DOEXStockDatabase(SQLiteDatabase):
             epws = []
             ddys = []
             
-            for epw_url, ddy_url in data[['epw_url','ddy_url']].to_records(index=False):
+            for epw_url, ddy_url, in_nhgis_county_gisjoin in data[['epw_url','ddy_url','in_nhgis_county_gisjoin']].to_records(index=False):
                 response = session.get(epw_url)
-                epws.append(response.content.decode())
+                epw = response.content.decode()
+
+                if dataset['weather_data'].startswith('amy'):
+                    epw = self.__tmy_to_amy_epw(dataset,epw,in_nhgis_county_gisjoin)
+                else:
+                    pass
+
+                epws.append(epw)
                 response = session.get(ddy_url)
                 ddys.append(response.content.decode(encoding='windows-1252'))
             
@@ -318,6 +328,97 @@ class DOEXStockDatabase(SQLiteDatabase):
 
         else:
             pass
+
+    def __tmy_to_amy_epw(self,dataset,epw,in_nhgis_county_gisjoin):
+        separator = '\r\n'
+        epw_table_start_index = 8
+
+        # read epw
+        epw = epw.split(separator)
+        epw_table = io.StringIO(separator.join(epw[epw_table_start_index:]))
+        epw_table = pd.read_csv(epw_table, header=None)
+
+        # location edits
+        location = epw[0].split(',')
+        location[4] = 'AMY2018'
+        epw[0] = ','.join(location)
+        latitude, longitude = float(location[6]), float(location[7])
+
+        # read amy
+        amy_table = self.__get_amy_table(dataset,in_nhgis_county_gisjoin,latitude,longitude)
+
+        # column mapping
+        column_map = {
+            'Year': 0,
+            'Month': 1,
+            'Day': 2,
+            'Hour': 3,
+            'Minute': 4,
+            'Dry Bulb Temperature [°C]': 6,
+            'Dew Point Temperature [C]': 7,
+            'Relative Humidity [%]': 8,
+            'Atmospheric Station Pressure [Pa]': 9,
+            'Global Horizontal Radiation [W/m2]': 13,
+            'Direct Normal Radiation [W/m2]': 14,
+            'Diffuse Horizontal Radiation [W/m2]': 15,
+            'Wind Speed [m/s]': 21,
+            'Wind Direction [Deg]': 20,
+        }
+
+        for k, v in column_map.items():
+            ixs = amy_table[amy_table[k].notnull()].index
+            epw_table.loc[ixs, v] = amy_table.loc[ixs][k]
+
+        # update start day string
+        data_periods = epw[7].split(',')
+        data_periods[4] = amy_table['date_time'].min().strftime('%A')
+        epw[7] = ','.join(data_periods)
+
+        # amy epw
+        epw = epw[:epw_table_start_index]
+        epw_table = epw_table.to_csv(sep=',', header=False, index=False,line_terminator=separator)
+        epw.append(epw_table)
+        epw = separator.join(epw)
+        
+        return epw
+
+    def __get_amy_table(self,dataset,in_nhgis_county_gisjoin,latitude,longitude):
+        year = dataset['weather_data'][3:]
+        url = self.__get_dataset_url(**dataset)
+        url = os.path.join(url,'weather',dataset['weather_data'],f'{in_nhgis_county_gisjoin}_{year}.csv')
+        amy_table = pd.read_csv(url,parse_dates=['date_time'])
+        amy_table['date_time'] = amy_table['date_time'] - timedelta(hours=1)
+        amy_table['Year'] = amy_table['date_time'].dt.year
+        amy_table['Month'] = amy_table['date_time'].dt.month
+        amy_table['Day'] = amy_table['date_time'].dt.day
+        amy_table['Hour'] = amy_table['date_time'].dt.hour + 1
+        amy_table['Minute'] = amy_table['date_time'].dt.minute + 1
+
+        # calculate other fields
+        # dew point temperature
+        psychrolib.SetUnitSystem(psychrolib.SI)
+        amy_table['Dew Point Temperature [C]'] = amy_table.apply(lambda x: psychrolib.GetTDewPointFromRelHum(
+            x['Dry Bulb Temperature [°C]'], x['Relative Humidity [%]']/100.0
+        ), axis=1)
+
+        # station atmposheric pressure
+        station_metadata = MeteostatWeather.get_station_from_coordinates(latitude, longitude, count=1).to_dict('index')
+        station_id = list(station_metadata.keys())[0]
+        elevation = station_metadata[station_id]['elevation']
+        ms = MeteostatWeather(
+            [station_id], 
+            resolution='hourly', 
+            earliest_start_timestamp=amy_table['date_time'].min() + timedelta(hours=1), 
+            latest_end_timestamp=amy_table['date_time'].max() + timedelta(hours=1),
+            model=True,
+            gap_limit=3,
+        )
+        ms_data = ms.download()
+        amy_table['Atmospheric Station Pressure [Pa]'] = ms_data['pres'].map(
+            lambda x: ms.convert_sea_level_pressure_to_station_pressure(x, elevation)
+        )
+
+        return amy_table
         
     def update_timeseries_table(self,dataset,buildings):
         buildings = buildings[['bldg_id','metadata_id','county','upgrade']].to_records(index=False)
