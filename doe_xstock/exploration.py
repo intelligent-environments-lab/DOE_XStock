@@ -23,12 +23,17 @@ logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_a')
 
 class MetadataClustering:
-    def __init__(self,database_filepath,name,maximum_n_clusters,minimum_n_clusters=None,filters=None,seed=None):
+    plt.rcParams['axes.xmargin'] = 0
+    plt.rcParams['axes.ymargin'] = 0
+    
+    def __init__(self,database_filepath,name,maximum_n_clusters,figure_filepath=None,minimum_n_clusters=None,filters=None,sample_count=None,seed=None):
         self.database_filepath = database_filepath
         self.name = name
         self.maximum_n_clusters = maximum_n_clusters
         self.minimum_n_clusters = minimum_n_clusters
+        self.figure_filepath = figure_filepath
         self.filters = filters
+        self.sample_count = sample_count
         self.seed = seed
         self.__database = self.__get_database(self.database_filepath)
 
@@ -47,6 +52,14 @@ class MetadataClustering:
     @property
     def minimum_n_clusters(self):
         return self.__minimum_n_clusters
+
+    @property
+    def figure_filepath(self):
+        return self.__figure_filepath
+
+    @property
+    def sample_count(self):
+        return self.__sample_count
 
     @property
     def seed(self):
@@ -70,7 +83,18 @@ class MetadataClustering:
 
     @minimum_n_clusters.setter
     def minimum_n_clusters(self,minimum_n_clusters):
-        self.__minimum_n_clusters = 2 if minimum_n_clusters is None else minimum_n_clusters
+        minimum_minimum_n_cluusters = 2
+        self.__minimum_n_clusters = minimum_minimum_n_cluusters if minimum_n_clusters is None\
+            or minimum_n_clusters < minimum_minimum_n_cluusters else minimum_n_clusters
+
+    @figure_filepath.setter
+    def figure_filepath(self,figure_filepath):
+        self.__figure_filepath = 'figures' if figure_filepath is None else figure_filepath
+        os.makedirs(self.__figure_filepath, exist_ok=True)
+
+    @sample_count.setter
+    def sample_count(self,sample_count):
+        self.__sample_count = 100 if sample_count is None else sample_count
 
     @seed.setter
     def seed(self,seed):
@@ -79,6 +103,187 @@ class MetadataClustering:
     @filters.setter
     def filters(self,filters):
         self.__filters = filters
+
+    def cluster(self):
+        query = f"""
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS metadata_clustering_name (
+            id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE (name)
+        );
+        
+        CREATE TABLE IF NOT EXISTS metadata_clustering (
+            id INTEGER NOT NULL,
+            name_id INTEGER NOT NULL,
+            reference_timestamp TEXT NOT NULL,
+            n_clusters INTEGER NOT NULL,
+            sse REAL NOT NULL,
+            silhouette_score REAL NOT NULL,
+            calinski_harabasz_score REAL NOT NULL,
+            PRIMARY KEY (id),
+            FOREIGN KEY (name_id) REFERENCES metadata_clustering_name (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            UNIQUE (name_id, n_clusters)
+        );
+        
+        CREATE TABLE IF NOT EXISTS metadata_clustering_label (
+            id INTEGER NOT NULL,
+            clustering_id INTEGER NOT NULL,
+            metadata_id INTEGER NOT NULL,
+            label INTEGER NOT NULL,
+            PRIMARY KEY (id),
+            FOREIGN KEY (clustering_id) REFERENCES metadata_clustering (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            UNIQUE (clustering_id, metadata_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS optimal_metadata_clustering (
+            id INTEGER NOT NULL,
+            name_id INTEGER NOT NULL,
+            clustering_id INTEGER NOT NULL,
+            score_name TEXT NOT NULL,
+            PRIMARY KEY (id),
+            FOREIGN KEY (name_id) REFERENCES metadata_clustering_name (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            FOREIGN KEY (clustering_id) REFERENCES metadata_clustering (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            UNIQUE (name_id),
+            CHECK (score_name IN ('sse', 'silhouette_score', 'calinski_harabasz_score'))
+        );
+        DELETE FROM metadata_clustering_name WHERE name = '{self.name}';
+        """
+        self.__database.query(query)
+        metadata = self.get_metadata()
+        scaler = MinMaxScaler()
+        scaler = scaler.fit(metadata.values)
+        metadata[metadata.columns.tolist()] = scaler.transform(metadata.values)
+        x = metadata.values
+        n_clusters_list = list(range(self.minimum_n_clusters,self.maximum_n_clusters + 1))
+        x_list = [x for _ in n_clusters_list]
+        work_order = [x_list,n_clusters_list]
+        reference_timestamp = datetime.now(tz=pytz.utc).replace(microsecond=0)
+        LOGGER.debug(f"Started clustering for name:{self.name} and reference_timestamp:{reference_timestamp}")
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = executor.map(self.fit_kmeans,*work_order)
+
+            for i, r in enumerate(results):
+                n_clusters, labels, sse, silhouette_score, calinski_harabasz_score  = r
+                query1 = f"""
+                INSERT INTO metadata_clustering_name (name)
+                VALUES ('{self.name}') 
+                ON CONFLICT (name) DO NOTHING;
+
+                INSERT INTO metadata_clustering (name_id, reference_timestamp, n_clusters, sse, silhouette_score, calinski_harabasz_score)
+                VALUES ((SELECT id FROM metadata_clustering_name WHERE name = '{self.name}'), '{reference_timestamp}', {n_clusters}, {sse}, {silhouette_score}, {calinski_harabasz_score});
+                """
+                values = [{'metadata_id':m,'label':l} for m, l in zip(metadata.index, labels)]
+                query2 = f"""
+                INSERT INTO metadata_clustering_label (clustering_id, metadata_id, label)
+                VALUES (
+                    (SELECT id FROM metadata_clustering WHERE 
+                        name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{self.name}') AND n_clusters = {n_clusters}
+                    ),
+                    :metadata_id,
+                    :label
+                );
+                """
+                self.__database.query(query1)
+                self.__database.insert_batch([query2],[values])
+                LOGGER.debug(f"Clustered for name:{self.name}, reference_timestamp:{reference_timestamp}, n_clusters:{n_clusters}")
+        
+        # set optimal clustering
+        LOGGER.debug(f"Inserting optimal clustering data for name:{self.name} and reference_timestamp:{reference_timestamp}")
+        score_name = 'silhouette_score'
+        query = f"""
+        INSERT INTO optimal_metadata_clustering (name_id, clustering_id, score_name)
+        SELECT
+            n.id AS name_id,
+            m.id AS clustering_id,
+            '{score_name}' AS score_name
+        FROM metadata_clustering m
+        LEFT JOIN (
+            SELECT
+                name_id,
+                MAX({score_name}) AS {score_name}
+            FROM metadata_clustering
+            GROUP BY
+                name_id
+        ) s ON s.name_id = m.name_id
+        LEFT JOIN metadata_clustering_name n ON n.id = m.name_id
+        WHERE m.{score_name} = s.{score_name} AND n.name = '{self.name}'
+        ;"""
+        self.__database.query(query)
+
+        # sample buildings for E+ simulation
+        LOGGER.debug(f"Sampling {self.sample_count} buildings for name:{self.name} and reference_timestamp:{reference_timestamp}")
+        self.sample_buildings_to_model(self.name, self.database_filepath, self.sample_count, self.seed)
+
+        # plot figures
+        LOGGER.debug(f"Plotting figures for name:{self.name} and reference_timestamp:{reference_timestamp}")
+        n_clusters = self.__database.query_table(f"""
+        SELECT
+            c.n_clusters
+        FROM metadata_clustering c
+        WHERE id = (
+            SELECT 
+                clustering_id 
+            FROM optimal_metadata_clustering 
+            WHERE name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{self.name}')
+        )
+        """).iloc[0]['n_clusters']
+        filename = self.name.lower().replace(' ','_').replace(',','')
+        self.plot_scores(self.name,self.database_filepath,figure_filepath=os.path.join(self.figure_filepath,f'{filename}_metadata_clustering_scores.png'))
+        self.plot_sample_count(self.name,n_clusters,self.database_filepath,figure_filepath=os.path.join(self.figure_filepath,f'{filename}_metadata_clustering_sample_count.png'))
+        self.plot_ground_truth(self.name,n_clusters,self.database_filepath,figure_filepath=os.path.join(self.figure_filepath,f'{filename}_metadata_clustering_ground_truth.png'))
+
+        LOGGER.debug(f"Ended clustering for name:{self.name} and reference_timestamp:{reference_timestamp}")
+
+    @classmethod
+    def sample_buildings_to_model(cls, name, database_filepath, count=100, seed=0):
+        data = cls.__get_database(database_filepath).query_table(f"""
+        SELECT
+            r.metadata_id,
+            r.label
+        FROM optimal_metadata_clustering o
+        LEFT JOIN metadata_clustering_label r ON r.clustering_id = o.clustering_id
+        LEFT JOIN metadata_clustering_name n ON n.id = o.name_id
+        WHERE n.name = '{name}'
+        ORDER BY
+            r.label ASC,
+            r.metadata_id ASC
+        """)
+        data['count'] = data.groupby('label')['label'].transform('count')
+        count = min(data.shape[0], count)
+        data = data.sample(n=count, weights=data['count'], random_state=seed)
+        cls.__get_database(database_filepath).query(f"""
+        CREATE TABLE IF NOT EXISTS metadata_clustering_building_sample (
+            id INTEGER NOT NULL,
+            name_id INTEGER NOT NULL,
+            metadata_id INTEGER NOT NULL,
+            PRIMARY KEY (id),
+            FOREIGN KEY (name_id) REFERENCES metadata_clustering_name (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            FOREIGN KEY (metadata_id) REFERENCES metadata (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            UNIQUE (name_id, metadata_id)
+        );
+        DELETE FROM metadata_clustering_building_sample WHERE name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{name}');
+        """)
+        query = f"""
+        INSERT INTO metadata_clustering_building_sample (name_id, metadata_id)
+            VALUES ((SELECT id FROM metadata_clustering_name WHERE name = '{name}'), :metadata_id)
+        ;
+        """
+        cls.__get_database(database_filepath).insert_batch([query], [data.to_dict('records')])
 
     @classmethod
     def plot_ground_truth(cls,name,n_clusters,database_filepath,figure_filepath=None):
@@ -199,100 +404,6 @@ class MetadataClustering:
         figure_filepath = f'{name}_metadata_clustering_scores.png' if figure_filepath is None else figure_filepath
         plt.savefig(figure_filepath,facecolor='white',bbox_inches='tight')
         plt.close()
-        
-    def cluster(self):
-        query = f"""
-        PRAGMA foreign_keys = ON;
-        CREATE TABLE IF NOT EXISTS metadata_clustering_name (
-            id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            PRIMARY KEY (id),
-            UNIQUE (name)
-        );
-        
-        CREATE TABLE IF NOT EXISTS metadata_clustering (
-            id INTEGER NOT NULL,
-            name_id INTEGER NOT NULL,
-            reference_timestamp TEXT NOT NULL,
-            n_clusters INTEGER NOT NULL,
-            sse REAL NOT NULL,
-            silhouette_score REAL NOT NULL,
-            calinski_harabasz_score REAL NOT NULL,
-            PRIMARY KEY (id),
-            FOREIGN KEY (name_id) REFERENCES metadata_clustering_name (id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            UNIQUE (name_id, n_clusters)
-        );
-        
-        CREATE TABLE IF NOT EXISTS metadata_clustering_label (
-            id INTEGER NOT NULL,
-            clustering_id INTEGER NOT NULL,
-            metadata_id INTEGER NOT NULL,
-            label INTEGER NOT NULL,
-            PRIMARY KEY (id),
-            FOREIGN KEY (clustering_id) REFERENCES metadata_clustering (id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            UNIQUE (clustering_id, metadata_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS optimal_metadata_clustering (
-            id INTEGER NOT NULL,
-            name_id INTEGER NOT NULL,
-            clustering_id INTEGER,
-            PRIMARY KEY (id),
-            FOREIGN KEY (name_id) REFERENCES metadata_clustering_name (id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            FOREIGN KEY (clustering_id) REFERENCES metadata_clustering (id)
-                ON DELETE CASCADE
-                ON UPDATE CASCADE,
-            UNIQUE (name_id)
-        );
-        DELETE FROM metadata_clustering_name WHERE name = '{self.name}';
-        """
-        self.__database.query(query)
-        metadata = self.get_metadata()
-        scaler = MinMaxScaler()
-        scaler = scaler.fit(metadata.values)
-        metadata[metadata.columns.tolist()] = scaler.transform(metadata.values)
-        x = metadata.values
-        n_clusters_list = list(range(self.minimum_n_clusters,self.maximum_n_clusters + 1))
-        x_list = [x for _ in n_clusters_list]
-        work_order = [x_list,n_clusters_list]
-        reference_timestamp = datetime.now(tz=pytz.utc).replace(microsecond=0)
-        LOGGER.debug(f"Started clustering for name:{self.name} and reference_timestamp:{reference_timestamp}")
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = executor.map(self.fit_kmeans,*work_order)
-
-            for i, r in enumerate(results):
-                n_clusters, labels, sse, silhouette_score, calinski_harabasz_score  = r
-                query1 = f"""
-                INSERT INTO metadata_clustering_name (name)
-                VALUES ('{self.name}') 
-                ON CONFLICT (name) DO NOTHING;
-
-                INSERT INTO metadata_clustering (name_id, reference_timestamp, n_clusters, sse, silhouette_score, calinski_harabasz_score)
-                VALUES ((SELECT id FROM metadata_clustering_name WHERE name = '{self.name}'), '{reference_timestamp}', {n_clusters}, {sse}, {silhouette_score}, {calinski_harabasz_score});
-                """
-                values = [{'metadata_id':m,'label':l} for m, l in zip(metadata.index, labels)]
-                query2 = f"""
-                INSERT INTO metadata_clustering_label (clustering_id, metadata_id, label)
-                VALUES (
-                    (SELECT id FROM metadata_clustering WHERE 
-                        name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{self.name}') AND n_clusters = {n_clusters}
-                    ),
-                    :metadata_id,
-                    :label
-                );
-                """
-                self.__database.query(query1)
-                self.__database.insert_batch([query2],[values])
-                LOGGER.debug(f"Clustered for name:{self.name}, reference_timestamp:{reference_timestamp}, n_clusters:{n_clusters}")
-
-        LOGGER.debug(f"Ended clustering for name:{self.name} and reference_timestamp:{reference_timestamp}")
 
     def fit_kmeans(self,x,n_clusters):
         result =KMeans(n_clusters,random_state=self.seed).fit(x)
@@ -313,7 +424,9 @@ class MetadataClustering:
         {where_clause}
         """
         metadata = self.__database.query_table(query).set_index('id')
-        return self.preprocess_metadata(metadata)
+        metadata = self.preprocess_metadata(metadata)
+
+        return metadata
 
     @classmethod
     def __transform_field_names(cls,fields):
@@ -338,9 +451,9 @@ class MetadataClustering:
         numeric_fields = [
             'in_sqft',
             ('in_window_area_ft_2','/in_wall_area_above_grade_exterior_ft_2','wwr'),
-            'out_electricity_cooling_energy_consumption_intensity',  
-            'out_electricity_heating_energy_consumption_intensity',
-            'out_electricity_water_systems_energy_consumption_intensity',
+            # 'out_electricity_cooling_energy_consumption_intensity',  
+            # 'out_electricity_heating_energy_consumption_intensity',
+            # 'out_electricity_water_systems_energy_consumption_intensity',
             'out_site_energy_total_energy_consumption_intensity',
         ]
         return categorical_fields, numeric_fields
