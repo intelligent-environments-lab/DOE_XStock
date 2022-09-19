@@ -223,7 +223,7 @@ class MetadataClustering:
 
         # sample buildings for E+ simulation
         LOGGER.debug(f"Sampling {self.sample_count} buildings for name:{self.name} and reference_timestamp:{reference_timestamp}")
-        self.sample_buildings_to_model(self.name, self.database_filepath, self.sample_count, self.seed)
+        self.set_buildings_to_simulate(self.name, self.database_filepath, self.sample_count, self.seed)
 
         # plot figures
         LOGGER.debug(f"Plotting figures for name:{self.name} and reference_timestamp:{reference_timestamp}")
@@ -246,7 +246,7 @@ class MetadataClustering:
         LOGGER.debug(f"Ended clustering for name:{self.name} and reference_timestamp:{reference_timestamp}")
 
     @classmethod
-    def sample_buildings_to_model(cls, name, database_filepath, count=100, seed=0):
+    def set_buildings_to_simulate(cls, name, database_filepath, count=100, seed=0):
         data = cls.__get_database(database_filepath).query_table(f"""
         SELECT
             r.metadata_id,
@@ -263,7 +263,7 @@ class MetadataClustering:
         count = min(data.shape[0], count)
         data = data.sample(n=count, weights=data['count'], random_state=seed)
         cls.__get_database(database_filepath).query(f"""
-        CREATE TABLE IF NOT EXISTS metadata_clustering_building_sample (
+        CREATE TABLE IF NOT EXISTS building_to_simulate_in_energyplus (
             id INTEGER NOT NULL,
             name_id INTEGER NOT NULL,
             metadata_id INTEGER NOT NULL,
@@ -276,10 +276,10 @@ class MetadataClustering:
                 ON UPDATE CASCADE,
             UNIQUE (name_id, metadata_id)
         );
-        DELETE FROM metadata_clustering_building_sample WHERE name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{name}');
+        DELETE FROM building_to_simulate_in_energyplus WHERE name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{name}');
         """)
         query = f"""
-        INSERT INTO metadata_clustering_building_sample (name_id, metadata_id)
+        INSERT INTO building_to_simulate_in_energyplus (name_id, metadata_id)
             VALUES ((SELECT id FROM metadata_clustering_name WHERE name = '{name}'), :metadata_id)
         ;
         """

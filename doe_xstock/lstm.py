@@ -16,11 +16,12 @@ logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_a')
 
 class TrainData:
-    def __init__(self,idd_filepath,osm,epw,schedules,ideal_loads_air_system=None,edit_ems=None,output_variables=None,iterations=None,max_workers=None,seed=None,**kwargs):
+    def __init__(self,idd_filepath,osm,epw,schedules,setpoints=None,ideal_loads_air_system=None,edit_ems=None,output_variables=None,iterations=None,max_workers=None,seed=None,**kwargs):
         self.idd_filepath = idd_filepath
         self.osm = osm
         self.epw = epw
         self.schedules = schedules
+        self.setpoints = setpoints
         self.ideal_loads_air_system = ideal_loads_air_system
         self.edit_ems = edit_ems
         self.output_variables = output_variables
@@ -48,6 +49,10 @@ class TrainData:
     @property
     def schedules(self):
         return self.__schedules
+
+    @property
+    def setpoints(self):
+        return self.__setpoints
 
     @property
     def ideal_loads_air_system(self):
@@ -88,6 +93,10 @@ class TrainData:
     @schedules.setter
     def schedules(self, schedules):
         self.__schedules = schedules
+
+    @setpoints.setter
+    def setpoints(self, setpoints):
+        self.__setpoints = setpoints
 
     @ideal_loads_air_system.setter
     def ideal_loads_air_system(self,ideal_loads_air_system):
@@ -642,6 +651,31 @@ class TrainData:
             for obj in idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem']:
                 obj.Dehumidification_Control_Type = 'None'
                 obj.Cooling_Sensible_Heat_Ratio = 1.0
+        else:
+            pass
+
+        # set setpoints filepath
+        if self.setpoints is not None:
+            setpoints_filepath = os.path.join(self.__simulator.output_directory,f'setpoints_{self.__simulator.simulation_id}.csv')
+            pd.DataFrame(self.setpoints).to_csv(setpoints_filepath,index=False)
+            setpoints = ['cooling','heating']
+            
+            # put schedule obj
+            for j, load in enumerate(setpoints):
+                obj = idf.newidfobject('Schedule:File')
+                schedule_object_name = f'ecobee {load} setpoint'
+                obj.Name = schedule_object_name
+                obj.Schedule_Type_Limits_Name = 'Temperature'
+                obj.File_Name = setpoints_filepath
+                obj.Column_Number = j + 1
+                obj.Rows_to_Skip_at_Top = 1
+                obj.Number_of_Hours_of_Data = 8760
+                obj.Minutes_per_Item = 60
+
+            for obj in idf.idfobjects['ThermostatSetpoint:DualSetpoint']:
+                obj.Cooling_Setpoint_Temperature_Schedule_Name = f'ecobee cooling setpoint'
+                obj.Heating_Setpoint_Temperature_Schedule_Name = f'ecobee heating setpoint'
+        
         else:
             pass
 

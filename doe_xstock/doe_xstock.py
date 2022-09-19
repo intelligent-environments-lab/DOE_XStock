@@ -60,7 +60,7 @@ class DOEXStock:
             i.metadata_id,
             i.bldg_osm AS osm, 
             i.bldg_epw AS epw
-        FROM building_energy_performance_simulation_input i
+        FROM energyplus_simulation_input i
         LEFT JOIN metadata m ON m.id = i.metadata_id
         WHERE 
             i.dataset_type = '{dataset_type}'
