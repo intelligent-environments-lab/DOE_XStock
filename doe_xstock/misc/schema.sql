@@ -526,8 +526,8 @@ CREATE TABLE IF NOT EXISTS ecobee_timeseries (
 );
 
 -- views
-DROP VIEW IF EXISTS building_energy_performance_simulation_input;
-CREATE VIEW building_energy_performance_simulation_input AS
+DROP VIEW IF EXISTS energyplus_simulation_input;
+CREATE VIEW energyplus_simulation_input AS
     SELECT
         m.id AS metadata_id,
         d.dataset_type,
