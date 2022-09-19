@@ -547,3 +547,46 @@ CREATE VIEW energyplus_simulation_input AS
         AND w.weather_file_latitude = m.in_weather_file_latitude
         AND w.weather_file_longitude = m.in_weather_file_longitude
 ;
+
+DROP VIEW IF EXISTS xstock_ecobee_pair;
+CREATE VIEW xstock_ecobee_pair AS
+    WITH x AS (
+        SELECT
+            ((e.row_number - 1) % e.building_count) + 1 AS ecobee_row_number,
+            e.metadata_id,
+            e.location
+        FROM (
+            SELECT
+                ROW_NUMBER() OVER(PARTITION BY n.name ORDER BY s.metadata_id ASC) AS row_number,
+                e.building_count,
+                s.metadata_id,
+                n.name AS location
+            FROM building_to_simulate_in_energyplus s
+            INNER JOIN metadata_clustering_name n ON n.id = s.name_id
+            INNER JOIN (
+                SELECT
+                    l.name,
+                    COUNT(b.name) AS building_count
+                FROM ecobee_building b
+                INNER JOIN ecobee_location l ON l.id = b.location_id
+                GROUP BY l.name
+            ) e ON e.name = n.name
+        ) e
+    ), e AS (
+        SELECT
+            ROW_NUMBER() OVER(PARTITION BY l.name ORDER BY b.name ASC) AS row_number,
+            b.id AS building_id,
+            l.name AS location
+        FROM ecobee_building b
+        INNER JOIN ecobee_location l ON l.id = b.location_id
+    )
+
+    SELECT
+        x.location,
+        x.metadata_id AS xstock_metadata_id,
+        e.building_id AS ecobee_building_id
+    FROM x
+    INNER JOIN e ON 
+        e.location = x.location 
+        AND e.row_number = x.ecobee_row_number
+;
