@@ -498,6 +498,33 @@ CREATE TABLE IF NOT EXISTS schedule (
     PRIMARY KEY (metadata_id, timestep)
 );
 
+CREATE TABLE IF NOT EXISTS ecobee_location (
+    id INTEGER PRIMARY KEY NOT NULL,
+    "name" TEXT NOT NULL,
+    UNIQUE ("name")
+);
+
+CREATE TABLE IF NOT EXISTS ecobee_building (
+    id INTEGER PRIMARY KEY NOT NULL,
+    location_id INTEGER NOT NULL,
+    "name" TEXT NOT NULL,
+    FOREIGN KEY (location_id) REFERENCES ecobee_location (id)
+        ON DELETE NO ACTION
+        ON UPDATE CASCADE,
+    UNIQUE ("name")
+);
+
+CREATE TABLE IF NOT EXISTS ecobee_timeseries (
+    building_id INTEGER NOT NULL,
+    "timestamp" TEXT NOT NULL,
+    cooling_setpoint REAL NOT NULL,
+    heating_setpoint REAL NOT NULL,
+    PRIMARY KEY (building_id, "timestamp")
+    FOREIGN KEY (building_id) REFERENCES ecobee_building (id)
+        ON DELETE NO ACTION
+        ON UPDATE CASCADE
+);
+
 -- views
 DROP VIEW IF EXISTS building_energy_performance_simulation_input;
 CREATE VIEW building_energy_performance_simulation_input AS
