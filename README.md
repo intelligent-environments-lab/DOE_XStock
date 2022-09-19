@@ -109,7 +109,7 @@ metadata_id, osm, epw = database.query_table(f"""
         i.bldg_epw AS epw,
         m.in_pv_system_size AS pv_system_size,
         m.in_ashrae_iecc_climate_zone_2004 AS climate_zone
-    FROM building_energy_performance_simulation_input i
+    FROM energyplus_simulation_input i
     LEFT JOIN metadata m ON m.id = i.metadata_id
     WHERE 
         i.dataset_type = 'resstock'
