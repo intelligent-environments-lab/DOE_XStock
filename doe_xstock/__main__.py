@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--version', action='version', version='0.0.1')
     parser.add_argument("-v", "--verbosity",action="count",default=0,help='increase output verbosity')
     parser.add_argument('-d','--filepath',type=str,default=DOEXStock.DEFAULT_DATABASE_FILEPATH,dest='filepath',help='Database filepath.')
+    parser.add_argument('-g','--figure_filepath',type=str,default='figures',dest='figure_filepath',help='Figure filepath.')
     parser.add_argument('-o','--overwrite',default=False,action='store_true',dest='overwrite',help='Will overwrite database if it exists.')
     parser.add_argument('-a','--apply_changes',default=False,action='store_true',dest='apply_changes',help='Will apply new changes to database schema.')
     subparsers = parser.add_subparsers(title='subcommands',required=True,dest='subcommands')
@@ -49,6 +50,7 @@ def main():
     subparser_metadata_cluster.add_argument('maximum_n_clusters',type=int,help='Maximum number of clusters.')
     subparser_metadata_cluster.add_argument('-m','--minimum_n_clusters',type=int,dest='minimum_n_clusters',default=2,help='Minimum number of clusters.')
     subparser_metadata_cluster.add_argument('-f','--filters',type=json.loads,dest='filters',help='Metadata table column filters.')
+    subparser_metadata_cluster.add_argument('-c','--sample_count',type=int,dest='sample_count',help='Number of buildings to sample for E+ modeling.')
     subparser_metadata_cluster.add_argument('-s','--seed',type=json.loads,dest='seed',help='Random state seed.')
     subparser_metadata_cluster.set_defaults(func=MetadataClustering.run)
 
