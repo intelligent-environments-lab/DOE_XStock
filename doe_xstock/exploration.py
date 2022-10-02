@@ -26,8 +26,9 @@ class MetadataClustering:
     plt.rcParams['axes.xmargin'] = 0
     plt.rcParams['axes.ymargin'] = 0
     
-    def __init__(self,database_filepath,name,maximum_n_clusters,figure_filepath=None,minimum_n_clusters=None,filters=None,sample_count=None,seed=None):
+    def __init__(self,database_filepath,dataset,name,maximum_n_clusters,figure_filepath=None,minimum_n_clusters=None,filters=None,sample_count=None,seed=None):
         self.database_filepath = database_filepath
+        self.dataset = dataset
         self.name = name
         self.maximum_n_clusters = maximum_n_clusters
         self.minimum_n_clusters = minimum_n_clusters
@@ -40,6 +41,10 @@ class MetadataClustering:
     @property
     def database_filepath(self):
         return self.__database_filepath
+
+    @property
+    def dataset(self):
+        return self.__dataset
 
     @property
     def name(self):
@@ -72,6 +77,10 @@ class MetadataClustering:
     @database_filepath.setter
     def database_filepath(self,database_filepath):
         self.__database_filepath = database_filepath
+
+    @dataset.setter
+    def dataset(self,dataset):
+        self.__dataset = dataset
 
     @name.setter
     def name(self,name):
@@ -414,8 +423,19 @@ class MetadataClustering:
         metadata_fields = categorical_fields + numeric_fields
         metadata_fields_query, metadata_fields = self.__transform_field_names(metadata_fields)
         separator = ',\n'
-        where_clause = None if self.filters is None else ' AND '.join([f'{k} IN {tuple(v)}' for k,v in self.filters.items()])
-        where_clause = '' if where_clause is None else f'WHERE {where_clause}'
+        where_clause = f"""
+        WHERE dataset_id = (
+            SELECT 
+                id 
+            FROM dataset 
+            WHERE 
+                dataset_type = '{self.dataset['dataset_type']}'
+                AND weather_data = '{self.dataset['weather_data']}'
+                AND year_of_publication = {self.dataset['year_of_publication']}
+                AND release = {self.dataset['release']}
+        )
+        """
+        where_clause += '' if self.filters is None else ' AND ' + ' AND '.join([f'{k} IN {tuple(v)}' for k,v in self.filters.items()])
         query = f"""
         SELECT
             id,
@@ -502,8 +522,3 @@ class MetadataClustering:
     @classmethod
     def __get_database(cls,filepath):
         return SQLiteDatabase(filepath)
-
-    @classmethod
-    def run(cls,filepath,name,maximum_n_clusters,minimum_n_clusters=None,filters=None,seed=None):
-        mc = cls(filepath,name,maximum_n_clusters,minimum_n_clusters=minimum_n_clusters,filters=filters,seed=seed)
-        mc.cluster()
