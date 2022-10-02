@@ -5,6 +5,7 @@ import io
 import logging
 import logging.config
 import os
+import uuid
 from bs4 import BeautifulSoup
 import pandas as pd
 import psychrolib
@@ -14,6 +15,7 @@ from requests.packages.urllib3.util.retry import Retry
 import urllib3
 from doe_xstock.data import MeteostatWeather
 from doe_xstock.database import SQLiteDatabase
+from doe_xstock.exploration import MetadataClustering
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
 from doe_xstock.utilities import read_json, write_data
 
@@ -32,11 +34,29 @@ class DOEXStock:
             overwrite=kwargs.pop('overwrite',False),
             apply_changes=kwargs.pop('apply_changes',False)
         )
-        filters = read_json(kwargs.pop('filters_filepath')) if kwargs.get('filters_filepath') is not None else None
-        kwargs = {key:value for key,value in kwargs.items() if key in ['dataset_type','weather_data','year_of_publication','release']}
-        kwargs = {**kwargs,'filters':filters}
-        database.insert_dataset(**kwargs)
+        filters = kwargs.pop('filters', None)
+        dataset = {key:value for key,value in kwargs.items() if key in ['dataset_type','weather_data','year_of_publication','release']}
+        database.insert_dataset(dataset, filters=filters)
         LOGGER.info(f'Ended insert.')
+
+
+    @staticmethod
+    def metadata_clustering(**kwargs):
+        LOGGER.info(f'Started metadata cluster.')
+        dataset = {key:value for key,value in kwargs.items() if key in ['dataset_type','weather_data','year_of_publication','release']}
+        mc = MetadataClustering(
+            kwargs.get('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH),
+            dataset,
+            kwargs.get('name', str(uuid.uuid1())),
+            kwargs.get('maximum_n_clusters',10),
+            figure_filepath=kwargs.get('figure_filepath'),
+            minimum_n_clusters=kwargs.get('minimum_n_clusters'),
+            filters=kwargs.get('filters'),
+            sample_count=kwargs.get('sample_count'),
+            seed=kwargs.get('seed')
+        )
+        mc.cluster()
+        LOGGER.info(f'Ended metadata cluster.')
 
     @staticmethod    
     def simulate(**kwargs):
@@ -117,13 +137,7 @@ class DOEXStockDatabase(SQLiteDatabase):
 
         self.execute_sql_from_file(schema_filepath)
 
-    def insert_dataset(self,dataset_type,weather_data,year_of_publication,release,filters):
-        dataset = {
-            'dataset_type':dataset_type,
-            'weather_data':weather_data,
-            'year_of_publication':year_of_publication,
-            'release':release
-        }
+    def insert_dataset(self,dataset, filters):
         LOGGER.info(f'Updating dataset table.')
         dataset_id = self.update_dataset_table(dataset)
         LOGGER.info(f'Updating data_dictionary table.')
@@ -180,6 +194,7 @@ class DOEXStockDatabase(SQLiteDatabase):
     def update_metadata_table(self,dataset,dataset_id,filters=None):
         data = DOEXStockDatabase.download_summary_data(DOEXStockDatabase.SummaryType.METADATA,**dataset)
         data = data.reset_index(drop=False)
+        data.columns = [c.replace('.','_').lower() for c in data.columns]
 
         if filters is not None:
             for column, values in filters.items():
@@ -188,7 +203,6 @@ class DOEXStockDatabase(SQLiteDatabase):
             pass
 
         if data.shape[0] > 0:
-            data.columns = [c.replace('.','_').lower() for c in data.columns]
             data['dataset_id'] = dataset_id
             self.insert(
                 'metadata',
