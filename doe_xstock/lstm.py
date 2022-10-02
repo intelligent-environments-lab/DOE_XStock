@@ -16,7 +16,7 @@ logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_a')
 
 class TrainData:
-    def __init__(self,idd_filepath,osm,epw,schedules,setpoints=None,ideal_loads_air_system=None,edit_ems=None,output_variables=None,iterations=None,max_workers=None,seed=None,**kwargs):
+    def __init__(self,idd_filepath,osm,epw,schedules,setpoints=None,ideal_loads_air_system=None,edit_ems=None,output_variables=None,timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs):
         self.idd_filepath = idd_filepath
         self.osm = osm
         self.epw = epw
@@ -25,6 +25,7 @@ class TrainData:
         self.ideal_loads_air_system = ideal_loads_air_system
         self.edit_ems = edit_ems
         self.output_variables = output_variables
+        self.timesteps_per_hour = timesteps_per_hour
         self.iterations = iterations
         self.max_workers = max_workers
         self.seed = seed
@@ -65,6 +66,10 @@ class TrainData:
     @property
     def output_variables(self):
         return self.__output_variables
+    
+    @property
+    def timesteps_per_hour(self):
+        return self.__timesteps_per_hour
 
     @property
     def iterations(self):
@@ -117,6 +122,10 @@ class TrainData:
         ]
         self.__output_variables =default_output_variables if output_variables is None else output_variables
 
+    @timesteps_per_hour.setter
+    def timesteps_per_hour(self,timesteps_per_hour):
+        self.__timesteps_per_hour = timesteps_per_hour = 1 if timesteps_per_hour is None else timesteps_per_hour
+
     @iterations.setter
     def iterations(self,iterations):
         self.__iterations = 3 if iterations is None else iterations
@@ -133,8 +142,8 @@ class TrainData:
         LOGGER.info('Started simulation.')
         self.__set_ideal_loads(**kwargs)
         self.__transform_idf()
-        seeds = [None] + [i + 1 for i in range(self.iterations)]
-        simulators = [self.__get_partial_load_simulator(i,seed=s) for i,s in enumerate(seeds)]
+        seeds = [None] + [i for i in range(self.iterations + 1)]
+        simulators = [self.__get_partial_load_simulator(i,seed=s) for i, s in enumerate(seeds)]
         LOGGER.debug('Simulating partial load iterations.')
         Simulator.multi_simulate(simulators,max_workers=self.max_workers)
         self.__partial_loads_data = {}
@@ -152,7 +161,7 @@ class TrainData:
                     LOGGER.exception(e)
         
         LOGGER.info('Ended simulation.')
-        return self.__partial_loads_data
+        return self.__ideal_loads_data, self.__partial_loads_data
 
     def __post_process_partial_load_simulation(self,simulator):
         # check that air system cooling and heating loads are 0
@@ -290,7 +299,14 @@ class TrainData:
     def __get_partial_load_simulator(self,uid,seed=None):
         # get multiplier
         size = len(self.__ideal_loads_data['load']['timestep'])
-        multiplier = [1]*size if seed is None else self.get_multipliers(size,seed=self.seed*seed)
+
+        if seed is None:
+            multiplier = [1.0]*size
+        elif seed == 0:
+            multiplier = [0.0]*size
+        else:
+            multiplier = self.get_multipliers(size,seed=self.seed*seed)
+        
         multiplier = pd.DataFrame(multiplier,columns=['multiplier'])
         multiplier['timestep'] = multiplier.index + 1
 
@@ -327,7 +343,7 @@ class TrainData:
         if self.ideal_loads_air_system:
             idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem'] = []
             obj_names = [
-                'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort',
+                'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort', 'ThermostatSetpoint:DualSetpoint',
                 'ZoneControl:Thermostat:OperativeTemperature','ZoneControl:Thermostat:TemperatureAndHumidity','ZoneControl:Thermostat:StagedDualSetpoint'
             ]
 
@@ -386,7 +402,7 @@ class TrainData:
                 obj.Column_Number = j + 1
                 obj.Rows_to_Skip_at_Top = 1 + i*timesteps
                 obj.Number_of_Hours_of_Data = 8760
-                obj.Minutes_per_Item = 15
+                obj.Minutes_per_Item = int(60/self.timesteps_per_hour)
 
                 # put other equipment
                 obj = idf.newidfobject('OtherEquipment')
@@ -403,11 +419,12 @@ class TrainData:
 
         self.__simulator.idf = idf.idfstr()
 
-    def get_multipliers(self,size,seed=0,minimum_value=0.3,maximum_value=1.7,probability=0.6):
+    def get_multipliers(self,size,seed=0,minimum_value=0.3,maximum_value=1.7,probability=0.85):
         np.random.seed(seed)
-        schedule = np.random.uniform(minimum_value,maximum_value,size)
-        schedule[np.random.random(size) > probability] = 1
-        return schedule.tolist()
+        schedule = np.random.uniform(minimum_value, maximum_value, size)
+        schedule[np.random.random(size) > probability] = 1.0
+        schedule = schedule.tolist()
+        return schedule
 
     def get_ideal_loads_data(self,**kwargs):
         self.__set_ideal_loads(**kwargs)
@@ -624,8 +641,15 @@ class TrainData:
         # make output directory
         os.makedirs(self.__simulator.output_directory,exist_ok=True)
 
-        # update output variables
+        # idf object
         idf = self.__simulator.get_idf_object()
+
+        # change to hourly simulation
+        idf.idfobjects['Timestep'] = []
+        obj = idf.newidfobject('Timestep')
+        obj.Number_of_Timesteps_per_Hour = self.timesteps_per_hour
+
+        # update output variables
         idf.idfobjects['Output:Variable'] = []
 
         for output_variable in self.output_variables:
@@ -667,7 +691,7 @@ class TrainData:
                 obj.Name = schedule_object_name
                 obj.Schedule_Type_Limits_Name = 'Temperature'
                 obj.File_Name = setpoints_filepath
-                obj.Column_Number = j + 1
+                obj.Column_Number = 1
                 obj.Rows_to_Skip_at_Top = 1
                 obj.Number_of_Hours_of_Data = 8760
                 obj.Minutes_per_Item = 60
