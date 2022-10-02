@@ -6,7 +6,6 @@ import os
 import sys
 import simplejson as json
 from doe_xstock.doe_xstock import DOEXStock
-from doe_xstock.exploration import MetadataClustering
 from doe_xstock.utilities import read_json
 
 logging_config = read_json(os.path.join(os.path.dirname(__file__),'misc/logging_config.json'))
@@ -18,7 +17,8 @@ def main():
     parser.add_argument('--version', action='version', version='0.0.1')
     parser.add_argument("-v", "--verbosity",action="count",default=0,help='increase output verbosity')
     parser.add_argument('-d','--filepath',type=str,default=DOEXStock.DEFAULT_DATABASE_FILEPATH,dest='filepath',help='Database filepath.')
-    parser.add_argument('-g','--figure_filepath',type=str,default='figures',dest='figure_filepath',help='Figure filepath.')
+    parser.add_argument('-g','--figure_directory',type=str,default='figures',dest='figure_directory',help='Figure directory.')
+    parser.add_argument('-t','--data_directory',type=str,default='data',dest='data_directory',help='Data directory.')
     parser.add_argument('-o','--overwrite',default=False,action='store_true',dest='overwrite',help='Will overwrite database if it exists.')
     parser.add_argument('-a','--apply_changes',default=False,action='store_true',dest='apply_changes',help='Will apply new changes to database schema.')
     subparsers = parser.add_subparsers(title='subcommands',required=True,dest='subcommands')

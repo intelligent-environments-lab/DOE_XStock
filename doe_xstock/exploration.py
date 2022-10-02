@@ -26,18 +26,20 @@ class MetadataClustering:
     plt.rcParams['axes.xmargin'] = 0
     plt.rcParams['axes.ymargin'] = 0
     
-    def __init__(self,database_filepath,dataset,name,maximum_n_clusters,figure_filepath=None,minimum_n_clusters=None,filters=None,sample_count=None,seed=None):
+    def __init__(self,database_filepath,dataset,name,maximum_n_clusters,data_directory=None,figure_directory=None,minimum_n_clusters=None,filters=None,sample_count=None,seed=None):
         self.database_filepath = database_filepath
         self.dataset = dataset
         self.name = name
         self.maximum_n_clusters = maximum_n_clusters
         self.minimum_n_clusters = minimum_n_clusters
-        self.figure_filepath = figure_filepath
+        self.__neighborhood_directory = None
+        self.data_directory = data_directory
+        self.figure_directory = figure_directory
         self.filters = filters
         self.sample_count = sample_count
         self.seed = seed
         self.__database = self.__get_database(self.database_filepath)
-
+        
     @property
     def database_filepath(self):
         return self.__database_filepath
@@ -59,8 +61,12 @@ class MetadataClustering:
         return self.__minimum_n_clusters
 
     @property
-    def figure_filepath(self):
-        return self.__figure_filepath
+    def data_directory(self):
+        return self.__data_directory
+
+    @property
+    def figure_directory(self):
+        return self.__figure_directory
 
     @property
     def sample_count(self):
@@ -96,10 +102,16 @@ class MetadataClustering:
         self.__minimum_n_clusters = minimum_minimum_n_cluusters if minimum_n_clusters is None\
             or minimum_n_clusters < minimum_minimum_n_cluusters else minimum_n_clusters
 
-    @figure_filepath.setter
-    def figure_filepath(self,figure_filepath):
-        self.__figure_filepath = 'figures' if figure_filepath is None else figure_filepath
-        os.makedirs(self.__figure_filepath, exist_ok=True)
+    @data_directory.setter
+    def data_directory(self,data_directory):
+        self.__data_directory = 'data' if data_directory is None else data_directory
+        self.__neighborhood_directory = os.path.join(self.data_directory,'neighborhood')
+        os.makedirs(self.__neighborhood_directory, exist_ok=True)
+
+    @figure_directory.setter
+    def figure_directory(self,figure_directory):
+        self.__figure_directory = 'figures' if figure_directory is None else figure_directory
+        os.makedirs(self.__figure_directory, exist_ok=True)
 
     @sample_count.setter
     def sample_count(self,sample_count):
@@ -232,7 +244,11 @@ class MetadataClustering:
 
         # sample buildings for E+ simulation
         LOGGER.debug(f"Sampling {self.sample_count} buildings for name:{self.name} and reference_timestamp:{reference_timestamp}")
-        self.set_buildings_to_simulate(self.name, self.database_filepath, self.sample_count, self.seed)
+        filename = self.name.lower().replace(' ','_').replace(',','')
+        self.set_buildings_to_simulate(
+            self.name, self.database_filepath, 
+            data_filepath=os.path.join(self.__neighborhood_directory,f'{filename}_neighborhood.csv'), count=self.sample_count, seed=self.seed
+        )
 
         # plot figures
         LOGGER.debug(f"Plotting figures for name:{self.name} and reference_timestamp:{reference_timestamp}")
@@ -247,28 +263,39 @@ class MetadataClustering:
             WHERE name_id = (SELECT id FROM metadata_clustering_name WHERE name = '{self.name}')
         )
         """).iloc[0]['n_clusters']
-        filename = self.name.lower().replace(' ','_').replace(',','')
-        self.plot_scores(self.name,self.database_filepath,figure_filepath=os.path.join(self.figure_filepath,f'{filename}_metadata_clustering_scores.png'))
-        self.plot_sample_count(self.name,n_clusters,self.database_filepath,figure_filepath=os.path.join(self.figure_filepath,f'{filename}_metadata_clustering_sample_count.png'))
-        self.plot_ground_truth(self.name,n_clusters,self.database_filepath,figure_filepath=os.path.join(self.figure_filepath,f'{filename}_metadata_clustering_ground_truth.png'))
-
+        
+        self.plot_scores(
+            self.name,self.database_filepath,
+            figure_filepath=os.path.join(self.figure_directory,f'{filename}_metadata_clustering_scores.png')
+        )
+        self.plot_sample_count(
+            self.name,n_clusters,self.database_filepath,
+            figure_filepath=os.path.join(self.figure_directory,f'{filename}_metadata_clustering_sample_count.png')
+        )
+        self.plot_ground_truth(
+            self.name,n_clusters,self.database_filepath,
+            figure_filepath=os.path.join(self.figure_directory,f'{filename}_metadata_clustering_ground_truth.png')
+        )
         LOGGER.debug(f"Ended clustering for name:{self.name} and reference_timestamp:{reference_timestamp}")
 
     @classmethod
-    def set_buildings_to_simulate(cls, name, database_filepath, count=100, seed=0):
+    def set_buildings_to_simulate(cls, name, database_filepath, data_filepath=None, count=100, seed=0):
         data = cls.__get_database(database_filepath).query_table(f"""
         SELECT
             r.metadata_id,
+            m.bldg_id,
             r.label
         FROM optimal_metadata_clustering o
         LEFT JOIN metadata_clustering_label r ON r.clustering_id = o.clustering_id
         LEFT JOIN metadata_clustering_name n ON n.id = o.name_id
+        LEFT JOIN metadata m ON m.id = r.metadata_id
         WHERE n.name = '{name}'
         ORDER BY
             r.label ASC,
             r.metadata_id ASC
         """)
         data['count'] = data.groupby('label')['label'].transform('count')
+        data['name'] = name
         count = min(data.shape[0], count)
         data = data.sample(n=count, weights=data['count'], random_state=seed)
         cls.__get_database(database_filepath).query(f"""
@@ -289,10 +316,12 @@ class MetadataClustering:
         """)
         query = f"""
         INSERT INTO building_to_simulate_in_energyplus (name_id, metadata_id)
-            VALUES ((SELECT id FROM metadata_clustering_name WHERE name = '{name}'), :metadata_id)
+            VALUES ((SELECT id FROM metadata_clustering_name WHERE name = :name), :metadata_id)
         ;
         """
         cls.__get_database(database_filepath).insert_batch([query], [data.to_dict('records')])
+        data_filepath = f'{name}_neighborhood.csv' if data_filepath is None else data_filepath
+        data[['name','metadata_id','bldg_id','label']].to_csv(data_filepath, index=False)
 
     @classmethod
     def plot_ground_truth(cls,name,n_clusters,database_filepath,figure_filepath=None):
@@ -313,52 +342,59 @@ class MetadataClustering:
             'in_usage_level', 'in_water_heater_efficiency', 
             'in_water_heater_fuel', 'in_window_areas', 'in_windows',
         ]
-        ground_truth_query = metadata_fields_query + ground_truth_fields
+        kwargs = {
+            'field': {'query':metadata_fields_query, 'fields':metadata_fields},
+            #  'other': {'query':ground_truth_fields, 'fields':ground_truth_fields},
+
+        }
         separator = ',\n'
-        data = cls.__get_database(database_filepath).query_table(f"""
-        SELECT
-            e.id,
-            c.label,
-            {separator.join(ground_truth_query)}
-        FROM metadata e
-        INNER JOIN metadata_clustering_label c ON c.metadata_id = e.id
-        LEFT JOIN metadata_clustering n ON n.id = c.clustering_id
-        LEFT JOIN metadata_clustering_name m ON m.id = n.name_id
-        WHERE m.name = '{name}' AND n.n_clusters = {n_clusters}
-        """).set_index('id')
-        column_limit = 3
-        fields = metadata_fields + ground_truth_fields
-        cmaps = ['RdBu' for _ in metadata_fields] + ['RdBu_r' for _ in ground_truth_fields]
-        row_count = math.ceil(len(fields)/column_limit)
-        column_count = min(column_limit,len(fields))
-        fig, _ = plt.subplots(row_count,column_count,figsize=(6*column_count,2.5*row_count))
-        divnorm = colors.TwoSlopeNorm(vcenter=0)
 
-        for ax, cmap, field in zip(fig.axes, cmaps, fields):
-            plot_data = data[['label',field]].copy()
+        for k, v in kwargs.items():
+            query = v['query']
+            fields = v['fields']
+            cmaps = ['RdBu' for _ in fields]
+            data = cls.__get_database(database_filepath).query_table(f"""
+            SELECT
+                e.id,
+                c.label,
+                {separator.join(query)}
+            FROM metadata e
+            INNER JOIN metadata_clustering_label c ON c.metadata_id = e.id
+            LEFT JOIN metadata_clustering n ON n.id = c.clustering_id
+            LEFT JOIN metadata_clustering_name m ON m.id = n.name_id
+            WHERE m.name = '{name}' AND n.n_clusters = {n_clusters}
+            """).set_index('id')
+            column_limit = 3
+            row_count = math.ceil(len(fields)/column_limit)
+            column_count = min(column_limit,len(fields))
+            fig, _ = plt.subplots(row_count,column_count,figsize=(6*column_count,2.5*row_count))
+            divnorm = colors.TwoSlopeNorm(vcenter=0)
 
-            if pd.api.types.is_numeric_dtype(plot_data[field]):
-                plot_data[field] = pd.cut(plot_data[field],6)
-                plot_data[field] = plot_data[field].astype(str)
-            else:
-                pass
+            for ax, cmap, field in zip(fig.axes, cmaps, fields):
+                plot_data = data[['label',field]].copy()
 
-            plot_data = plot_data[['label',field]].groupby(['label',field]).size().reset_index(name='count')
-            plot_data = plot_data.pivot(index=field,columns='label',values='count')
-            plot_data = plot_data.fillna(0)
-            x, y, z = plot_data.columns.tolist(), plot_data.index.tolist(), plot_data.values
-            _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap=cmap,edgecolors='white',linewidth=0)
-            _ = fig.colorbar(cm.ScalarMappable(cmap=cmap,norm=divnorm),ax=ax,orientation='vertical',label='Count',fraction=0.025,pad=0.01)
-            ax.tick_params('x',which='both',rotation=0)
-            ax.set_ylabel('Option')
-            ax.set_xlabel('Cluster')
-            ax.set_title(field)
-            ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
-        
-        plt.tight_layout()
-        figure_filepath = f'{name}_metadata_clustering_ground_truth.png' if figure_filepath is None else figure_filepath
-        plt.savefig(figure_filepath,facecolor='white',bbox_inches='tight')
-        plt.close()
+                if pd.api.types.is_numeric_dtype(plot_data[field]):
+                    plot_data[field] = pd.cut(plot_data[field],6)
+                    plot_data[field] = plot_data[field].astype(str)
+                else:
+                    pass
+
+                plot_data = plot_data[['label',field]].groupby(['label',field]).size().reset_index(name='count')
+                plot_data = plot_data.pivot(index=field,columns='label',values='count')
+                plot_data = plot_data.fillna(0)
+                x, y, z = plot_data.columns.tolist(), plot_data.index.tolist(), plot_data.values
+                _ = ax.pcolormesh(x,y,z,shading='nearest',norm=divnorm,cmap=cmap,edgecolors='white',linewidth=0)
+                _ = fig.colorbar(cm.ScalarMappable(cmap=cmap,norm=divnorm),ax=ax,orientation='vertical',label='Count',fraction=0.025,pad=0.01)
+                ax.tick_params('x',which='both',rotation=0)
+                ax.set_ylabel('Option')
+                ax.set_xlabel('Cluster')
+                ax.set_title(field)
+                ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
+            
+            plt.tight_layout()
+            figure_filepath = f'{name}_metadata_clustering_{k}_ground_truth.png' if figure_filepath is None else figure_filepath
+            plt.savefig(figure_filepath,facecolor='white',bbox_inches='tight')
+            plt.close()
 
     @classmethod
     def plot_sample_count(cls,name,n_clusters,database_filepath,figure_filepath=None):
@@ -373,7 +409,7 @@ class MetadataClustering:
         GROUP BY c.label
         ORDER BY c.label
         """)
-        _, ax = plt.subplots(1,1,figsize=(6,2))
+        _, ax = plt.subplots(1,1,figsize=(4,2))
         x, y = data['label'], data['count']
         ax.bar(x,y)
         ax.set_xlabel('cluster label')
@@ -400,7 +436,7 @@ class MetadataClustering:
         scores = data.columns.tolist()[2:]
         row_count = 1
         columns_count = len(scores)
-        fig, ax = plt.subplots(row_count,columns_count,figsize=(4*columns_count,2*row_count))
+        fig, ax = plt.subplots(row_count,columns_count,figsize=(3*columns_count,2*row_count))
 
         for ax, score in zip(fig.axes, scores):
             x, y = data['n_clusters'], data[score]
@@ -410,7 +446,7 @@ class MetadataClustering:
             ax.set_ylabel(score)
 
         plt.tight_layout()
-        figure_filepath = f'{name}_metadata_clustering_scores.png' if figure_filepath is None else figure_filepath
+        figure_filepath = f'{name}_metadata_clustering_scores.pdf' if figure_filepath is None else figure_filepath
         plt.savefig(figure_filepath,facecolor='white',bbox_inches='tight')
         plt.close()
 
