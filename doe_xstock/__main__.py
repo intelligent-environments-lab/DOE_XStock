@@ -29,11 +29,11 @@ def main():
     subparser_dataset.add_argument('weather_data',type=str,choices=['tmy3','amy2018'],help='Weather file used in dataset simulation.')
     subparser_dataset.add_argument('year_of_publication',type=int,choices=[2021],help='Year dataset was published.')
     subparser_dataset.add_argument('release',type=int,choices=[1],help='Dataset release version.')
+    subparser_dataset.add_argument('-f','--filters',type=json.loads,dest='filters',help='Metadata table column filters.')
     dataset_subparsers = subparser_dataset.add_subparsers(title='subcommands',required=True,dest='subcommands')
 
     # dataset -> insert
     subparser_insert = dataset_subparsers.add_parser('insert',description='Insert dataset into database.')
-    subparser_insert.add_argument('-f','--filters_filepath',type=str,dest='filters_filepath',help='Insertion filters filepath where keys are columns in metadata table and values are values found in the columns.')
     subparser_insert.set_defaults(func=DOEXStock.insert)
     
     # dataset -> simulate
@@ -44,15 +44,14 @@ def main():
     subparser_simulate.add_argument('-o','--root_output_directory',type=str,dest='root_output_directory',help='Root directory to store simulation output directory to.')
     subparser_simulate.set_defaults(func=DOEXStock.simulate)
 
-    # metadata_cluster
-    subparser_metadata_cluster = subparsers.add_parser('metadata_cluster',description='Metadata KMeans clustering.')
-    subparser_metadata_cluster.add_argument('name',type=str,help='Unique name.')
-    subparser_metadata_cluster.add_argument('maximum_n_clusters',type=int,help='Maximum number of clusters.')
-    subparser_metadata_cluster.add_argument('-m','--minimum_n_clusters',type=int,dest='minimum_n_clusters',default=2,help='Minimum number of clusters.')
-    subparser_metadata_cluster.add_argument('-f','--filters',type=json.loads,dest='filters',help='Metadata table column filters.')
-    subparser_metadata_cluster.add_argument('-c','--sample_count',type=int,dest='sample_count',help='Number of buildings to sample for E+ modeling.')
-    subparser_metadata_cluster.add_argument('-s','--seed',type=json.loads,dest='seed',help='Random state seed.')
-    subparser_metadata_cluster.set_defaults(func=MetadataClustering.run)
+    # dataset -> metadata_cluster
+    subparser_metadata_clustering = dataset_subparsers.add_parser('metadata_clustering',description='Metadata KMeans clustering.')
+    subparser_metadata_clustering.add_argument('name',type=str,help='Unique name.')
+    subparser_metadata_clustering.add_argument('maximum_n_clusters',type=int,help='Maximum number of clusters.')
+    subparser_metadata_clustering.add_argument('-m','--minimum_n_clusters',type=int,dest='minimum_n_clusters',default=2,help='Minimum number of clusters.')
+    subparser_metadata_clustering.add_argument('-c','--sample_count',type=int,dest='sample_count',help='Number of buildings to sample for E+ modeling.')
+    subparser_metadata_clustering.add_argument('-s','--seed',type=json.loads,dest='seed',help='Random state seed.')
+    subparser_metadata_clustering.set_defaults(func=DOEXStock.metadata_clustering)
 
     args = parser.parse_args()
     arg_spec = inspect.getfullargspec(args.func)
