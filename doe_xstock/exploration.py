@@ -469,11 +469,7 @@ class MetadataClustering:
             'in_insulation_wall',
         ]
         numeric_fields = [
-            'in_sqft',
             ('in_window_area_ft_2','/in_wall_area_above_grade_exterior_ft_2','wwr'),
-            # 'out_electricity_cooling_energy_consumption_intensity',  
-            # 'out_electricity_heating_energy_consumption_intensity',
-            # 'out_electricity_water_systems_energy_consumption_intensity',
             'out_site_energy_total_energy_consumption_intensity',
         ]
         return categorical_fields, numeric_fields
