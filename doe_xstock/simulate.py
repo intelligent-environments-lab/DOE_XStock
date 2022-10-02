@@ -159,6 +159,7 @@ class Simulator:
             simulator.__write_epw()
             idf = simulator.get_idf_object(weather=simulator.epw_filepath)
             kwargs = simulator.get_run_kwargs()
+            simulator.__write_idf()
             runs.append([idf,kwargs])
         
         runIDFs(runs,max_workers)
