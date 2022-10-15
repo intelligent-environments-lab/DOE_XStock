@@ -157,3 +157,16 @@ cython_debug/
 
 # MacOS
 .DS_Store
+
+# energyplus output (only keep idf, weather, load, schedules, setpoint, error and summary files for partial load simulations.)
+energyplus_output/*/*
+!energyplus_output/*-partial/*.idf
+!energyplus_output/*-partial/weather.epw
+!energyplus_output/*-partial/*_partial_load.csv
+!energyplus_output/*-partial/*_schedules.csv
+!energyplus_output/*-partial/*_setpoint.csv
+!energyplus_output/*-partial/*partial.err
+!energyplus_output/*-partial/*_summary.csv
+
+# do not store database
+.db
