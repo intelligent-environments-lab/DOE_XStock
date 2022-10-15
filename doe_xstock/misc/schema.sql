@@ -517,36 +517,12 @@ CREATE TABLE IF NOT EXISTS ecobee_building (
 CREATE TABLE IF NOT EXISTS ecobee_timeseries (
     building_id INTEGER NOT NULL,
     "timestamp" TEXT NOT NULL,
-    cooling_setpoint REAL NOT NULL,
-    heating_setpoint REAL NOT NULL,
+    setpoint REAL NOT NULL,
     PRIMARY KEY (building_id, "timestamp")
     FOREIGN KEY (building_id) REFERENCES ecobee_building (id)
         ON DELETE NO ACTION
         ON UPDATE CASCADE
 );
-
--- views
-DROP VIEW IF EXISTS energyplus_simulation_input;
-CREATE VIEW energyplus_simulation_input AS
-    SELECT
-        m.id AS metadata_id,
-        d.dataset_type,
-        d.weather_data AS dataset_weather_data,
-        d.year_of_publication AS dataset_year_of_publication,
-        d.release AS dataset_release,
-        m.bldg_id,
-        m.upgrade AS bldg_upgrade,
-        e.osm AS bldg_osm,
-        w.epw AS bldg_epw
-    FROM metadata m
-    INNER JOIN dataset d ON d.id = m.dataset_id
-    INNER JOIN model e ON e.metadata_id = m.id
-    INNER JOIN weather w ON
-        w.dataset_id = m.dataset_id
-        AND w.weather_file_tmy3 = m.in_weather_file_tmy3
-        AND w.weather_file_latitude = m.in_weather_file_latitude
-        AND w.weather_file_longitude = m.in_weather_file_longitude
-;
 
 DROP VIEW IF EXISTS xstock_ecobee_pair;
 CREATE VIEW xstock_ecobee_pair AS
@@ -589,4 +565,29 @@ CREATE VIEW xstock_ecobee_pair AS
     INNER JOIN e ON 
         e.location = x.location 
         AND e.row_number = x.ecobee_row_number
+;
+
+-- views
+DROP VIEW IF EXISTS energyplus_simulation_input;
+CREATE VIEW energyplus_simulation_input AS
+    SELECT
+        m.id AS metadata_id,
+        d.dataset_type,
+        d.weather_data AS dataset_weather_data,
+        d.year_of_publication AS dataset_year_of_publication,
+        d.release AS dataset_release,
+        m.bldg_id,
+        c.ecobee_building_id AS ecobee_bldg_id,
+        m.upgrade AS bldg_upgrade,
+        e.osm AS bldg_osm,
+        w.epw AS bldg_epw
+    FROM metadata m
+    INNER JOIN dataset d ON d.id = m.dataset_id
+    INNER JOIN model e ON e.metadata_id = m.id
+    INNER JOIN weather w ON
+        w.dataset_id = m.dataset_id
+        AND w.weather_file_tmy3 = m.in_weather_file_tmy3
+        AND w.weather_file_latitude = m.in_weather_file_latitude
+        AND w.weather_file_longitude = m.in_weather_file_longitude
+    LEFT JOIN xstock_ecobee_pair c ON c.xstock_metadata_id = m.id
 ;
