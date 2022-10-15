@@ -322,7 +322,7 @@ class TrainData:
         elif seed == 0:
             multiplier = [0.0]*size
         else:
-            multiplier = self.get_multipliers(size,seed=self.seed*seed)
+            multiplier = self.get_multipliers(size,seed=seed)
         
         multiplier = pd.DataFrame(multiplier,columns=['multiplier'])
         multiplier['timestep'] = multiplier.index + 1
