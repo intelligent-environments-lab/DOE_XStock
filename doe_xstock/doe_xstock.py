@@ -154,8 +154,11 @@ class DOEXStockDatabase(SQLiteDatabase):
             LOGGER.info(f'Updating weather table.')
             self.update_weather_table(dataset_id,dataset,buildings)
             LOGGER.info(f'Updating timeseries table.')
-            self.update_timeseries_table(dataset,buildings)
-            LOGGER.info(f'Updating model table.')
+            
+            # NOTE: Will skip downloading simulation time series to save on database size
+            # self.update_timeseries_table(dataset,buildings)
+            # LOGGER.info(f'Updating model table.')
+
             self.update_model_table(dataset,buildings)
             LOGGER.info(f'Updating schedule table.')
             self.update_schedule_table(dataset,buildings)
