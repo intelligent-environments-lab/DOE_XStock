@@ -16,6 +16,7 @@ import urllib3
 from doe_xstock.data import MeteostatWeather
 from doe_xstock.database import SQLiteDatabase
 from doe_xstock.exploration import MetadataClustering
+from doe_xstock.lstm import TrainData
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
 from doe_xstock.utilities import read_json, write_data
 
@@ -58,6 +59,157 @@ class DOEXStock:
         )
         mc.cluster()
         LOGGER.info(f'Ended metadata cluster.')
+
+    @staticmethod
+    def set_lstm_train_data(**kwargs):
+        # initializa database
+        database = DOEXStockDatabase(kwargs.pop('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH))
+        TrainData.initialize_database(database)
+
+        # store simulation variables
+        simulation_output_directory = kwargs.get('energyplus_output_directory','energyplus_output')
+        simulation_output_directory
+        idd_filepath = kwargs['idd_filepath']
+        iterations = kwargs.get('iterations',4)
+        max_workers = iterations + 1
+        dataset_type = kwargs['dataset_type']
+        weather_data = kwargs['weather_data']
+        year_of_publication = kwargs['year_of_publication']
+        release = kwargs['release']
+        bldg_id = kwargs['bldg_id']
+
+        # get relevant simulation input parameters
+        simulation_data = database.query_table(f"""
+        SELECT 
+            i.metadata_id,
+            i.bldg_osm AS osm, 
+            i.bldg_epw AS epw,
+            i.ecobee_bldg_id AS ecobee_id
+        FROM energyplus_simulation_input i
+        WHERE 
+            i.dataset_type = '{dataset_type}'
+            AND i.dataset_weather_data = '{weather_data}'
+            AND i.dataset_year_of_publication = {year_of_publication}
+            AND i.dataset_release = {release}
+            AND i.bldg_id = {bldg_id}
+        """)
+        simulation_data = simulation_data.to_dict(orient='records')[0]
+        metadata_id = simulation_data['metadata_id']
+        ecobee_id = simulation_data['ecobee_id']
+        schedules = database.query_table(f"""
+        SELECT 
+            * 
+        FROM schedule 
+        WHERE metadata_id = {metadata_id}
+        """)
+        schedules = schedules.drop(columns=['metadata_id','timestep',])
+        schedules = schedules.to_dict(orient='list')
+
+        # use ecobee setpoint if available
+        if simulation_data['ecobee_id']:
+            setpoints = database.query_table(f"""
+            SELECT
+                setpoint
+            FROM ecobee_timeseries
+            WHERE building_id = {ecobee_id}
+            ORDER BY
+                timestamp ASC
+            """).to_dict(orient='list')
+        else:
+            setpoints = None
+
+        # simulation ID is built from dataset reference and bldg_id
+        simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'\
+            if kwargs.get('simulation_id') is None else kwargs['simulation_id']
+        output_directory = os.path.join(simulation_output_directory,f'output_{simulation_id}')
+        
+        # initialize lstm train data class
+        ltd = TrainData(
+            idd_filepath,
+            simulation_data['osm'],
+            simulation_data['epw'],
+            schedules,
+            setpoints=setpoints,
+            ideal_loads_air_system=False,
+            edit_ems=True,
+            seed=kwargs.get('seed',simulation_id),
+            iterations=iterations,
+            max_workers=max_workers,
+            simulation_id=simulation_id,
+            output_directory=output_directory,
+        )
+        queries, values, partial_loads_data_list = [], [], []
+
+        # delete any existing simulations for metadata_id
+        database.query(f"""
+        PRAGMA foreign_keys = ON;
+        DELETE FROM energyplus_simulation WHERE metadata_id = {metadata_id};
+        """)
+        
+        # first simulation is to get the weighted average temperature for the as-is model (mechanical system loads)
+        mechanical_loads_reference = 0
+        ltd.update_kwargs('simulation_id',f'{ltd.kwargs["simulation_id"]}-{mechanical_loads_reference}-mechanical')
+        ltd.update_kwargs('output_directory',f'{ltd.kwargs["output_directory"]}-{mechanical_loads_reference}-mechanical')
+        mechanical_loads_data = pd.DataFrame(ltd.get_ideal_loads_data()['temperature'])
+        ltd.update_kwargs('simulation_id',simulation_id)
+        ltd.update_kwargs('output_directory',output_directory)
+        mechanical_loads_data['metadata_id'] = metadata_id
+        queries.append(f"""
+        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
+        VALUES (:metadata_id, {mechanical_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
+        ;""")
+        values.append(mechanical_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
+        queries.append(f"""
+        INSERT INTO energyplus_mechanical_system_simulation (simulation_id, timestep, average_indoor_air_temperature)
+        VALUES (
+            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {mechanical_loads_reference}),
+            :timestep, :value
+        );""")
+        values.append(mechanical_loads_data.to_dict('records'))
+        
+        # run ideal air loads system and other equipment simulations
+        ltd.ideal_loads_air_system = True
+        ideal_loads_reference = 1
+        ideal_loads_data_temp, partial_loads_data = ltd.simulate_partial_loads(ideal_loads_reference=ideal_loads_reference)
+        ideal_loads_data = pd.DataFrame(ideal_loads_data_temp['load'])
+        ideal_loads_data['average_indoor_air_temperature'] = ideal_loads_data_temp['temperature']['value']
+        ideal_loads_data['metadata_id'] = metadata_id
+        queries.append(f"""
+        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
+        VALUES (:metadata_id, {ideal_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
+        ;""")
+        values.append(ideal_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
+        queries.append(f"""
+        INSERT INTO energyplus_ideal_system_simulation (simulation_id, timestep, average_indoor_air_temperature, cooling_load, heating_load)
+        VALUES (
+            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {ideal_loads_reference}),
+            :timestep, :average_indoor_air_temperature, :cooling, :heating
+        );""")
+        values.append(ideal_loads_data.to_dict('records'))
+
+        for simulation_id, data in partial_loads_data.items():
+            data = pd.DataFrame(data)
+            data['metadata_id'] = metadata_id
+            data['reference'] = int(simulation_id.split('-')[-2])
+            partial_loads_data_list.append(data)
+
+        partial_loads_data = pd.concat(partial_loads_data_list, ignore_index=True, sort=False)
+        queries.append(f"""
+        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
+        VALUES (:metadata_id, :reference, {ecobee_id if ecobee_id is not None else 'NULL'})
+        ;""")
+        values.append(partial_loads_data.groupby(['metadata_id','reference']).size().reset_index().to_dict('records'))
+        queries.append(f"""
+        INSERT INTO lstm_train_data (
+            simulation_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation,
+            outdoor_air_temperature, average_indoor_air_temperature, occupant_count, cooling_load, heating_load
+        ) VALUES (
+            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = :reference),
+            :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation,
+            :outdoor_air_temperature, :average_indoor_air_temperature, :occupant_count, :cooling_load, :heating_load
+        );""")
+        values.append(partial_loads_data.to_dict('records'))
+        database.insert_batch(queries, values)
 
     @staticmethod    
     def simulate(**kwargs):

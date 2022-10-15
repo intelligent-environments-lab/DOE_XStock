@@ -4,6 +4,7 @@ import logging
 import logging.config
 import os
 from pathlib import Path
+import shutil
 from eppy.runner.run_functions import EnergyPlusRunError
 from eppy.bunch_subclass import BadEPFieldError
 import numpy as np
@@ -83,6 +84,10 @@ class TrainData:
     def seed(self):
         return self.__seed
 
+    @property
+    def kwargs(self):
+        return self.__kwargs
+
     @idd_filepath.setter
     def idd_filepath(self,idd_filepath):
         self.__idd_filepath = idd_filepath
@@ -138,12 +143,22 @@ class TrainData:
     def seed(self,seed):
         self.__seed = 0 if seed is None else seed
 
+    def update_kwargs(self,key,value):
+        self.__kwargs[key] = value
+
     def simulate_partial_loads(self,**kwargs):
         LOGGER.info('Started simulation.')
+        ideal_loads_reference = kwargs.get('ideal_loads_reference',1)
+        initial_simulation_id = self.kwargs["simulation_id"]
+        initial_output_directory = self.kwargs["output_directory"]
+        self.__kwargs['simulation_id'] = f'{self.kwargs["simulation_id"]}-{ideal_loads_reference}-ideal'
+        self.__kwargs['output_directory'] = f'{self.kwargs["output_directory"]}-{ideal_loads_reference}-ideal'
         self.__set_ideal_loads(**kwargs)
+        self.__kwargs['simulation_id'] = initial_simulation_id
+        self.__kwargs['output_directory'] = initial_output_directory
         self.__transform_idf()
         seeds = [None] + [i for i in range(self.iterations + 1)]
-        simulators = [self.__get_partial_load_simulator(i,seed=s) for i, s in enumerate(seeds)]
+        simulators = [self.__get_partial_load_simulator(i + ideal_loads_reference + 1,seed=s) for i, s in enumerate(seeds)]
         LOGGER.debug('Simulating partial load iterations.')
         Simulator.multi_simulate(simulators,max_workers=self.max_workers)
         self.__partial_loads_data = {}
@@ -291,12 +306,14 @@ class TrainData:
         WHERE t.DayType NOT IN ('SummerDesignDay', 'WinterDesignDay')
         """
         data = simulator.get_database().query_table(query)
+        filepath = os.path.join(simulator.output_directory,f'{simulator.simulation_id}_summary.csv')
+        data.to_csv(filepath,index=False)
         data = data.to_dict('list')
         _ = data.pop('index',None)
         
         return simulator.simulation_id, data
 
-    def __get_partial_load_simulator(self,uid,seed=None):
+    def __get_partial_load_simulator(self,reference,seed=None):
         # get multiplier
         size = len(self.__ideal_loads_data['load']['timestep'])
 
@@ -318,22 +335,37 @@ class TrainData:
         data['heating'] *= data['multiplier']
 
         # save load schedule file
-        simulation_id = f'{self.__simulator.simulation_id}_{uid}'
-        output_directory = f'{self.__simulator.output_directory}_{uid}'
-        filepath = os.path.join(output_directory,f'load_{simulation_id}.csv')
+        simulation_id = f'{self.kwargs["simulation_id"]}-{reference}-partial'
+        output_directory = f'{self.kwargs["output_directory"]}-{reference}-partial'
+        filepath = os.path.join(output_directory,f'{simulation_id}_partial_load.csv')
         os.makedirs(output_directory,exist_ok=True)
         data[['cooling','heating']].to_csv(filepath,index=False)
 
         # set idf
         idf = self.__simulator.get_idf_object()
 
+        # set load schedule
         for obj in idf.idfobjects['Schedule:File']:
             if 'lstm' in obj.Name.lower():
                 obj.File_Name = filepath
             else:
                 continue
+        
+        # convert idf to string
+        idf = idf.idfstr()
+        idf = idf.replace(self.__simulator.simulation_id,simulation_id)
+        
+        # update setpoint schedule filename
+        source_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_setpoint.csv')
+        destination_filepath = os.path.join(output_directory,f'{simulation_id}_setpoint.csv')
+        _ =shutil.copy2(source_filepath,destination_filepath)
 
-        return Simulator(self.idd_filepath,idf.idfstr(),self.epw,simulation_id=simulation_id,output_directory=output_directory)
+        # update equipment schedule filename
+        source_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_schedules.csv')
+        destination_filepath = os.path.join(output_directory,f'{simulation_id}_schedules.csv')
+        _ =shutil.copy2(source_filepath,destination_filepath)
+
+        return Simulator(self.idd_filepath,idf,self.epw,simulation_id=simulation_id,output_directory=output_directory)
     
     def __transform_idf(self):
         # generate idf for simulations with partial loads
@@ -661,7 +693,7 @@ class TrainData:
         idf.idfobjects['RunPeriodControl:DaylightSavingTime'] = []
 
         # set schedules filepath
-        schedules_filepath = os.path.join(self.__simulator.output_directory,f'schedules_{self.__simulator.simulation_id}.csv')
+        schedules_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_schedules.csv')
         pd.DataFrame(self.schedules).to_csv(schedules_filepath,index=False)
 
         for obj in idf.idfobjects['Schedule:File']:
@@ -680,28 +712,83 @@ class TrainData:
 
         # set setpoints filepath
         if self.setpoints is not None:
-            setpoints_filepath = os.path.join(self.__simulator.output_directory,f'setpoints_{self.__simulator.simulation_id}.csv')
+            setpoints_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_setpoint.csv')
             pd.DataFrame(self.setpoints).to_csv(setpoints_filepath,index=False)
-            setpoints = ['cooling','heating']
             
             # put schedule obj
-            for j, load in enumerate(setpoints):
-                obj = idf.newidfobject('Schedule:File')
-                schedule_object_name = f'ecobee {load} setpoint'
-                obj.Name = schedule_object_name
-                obj.Schedule_Type_Limits_Name = 'Temperature'
-                obj.File_Name = setpoints_filepath
-                obj.Column_Number = 1
-                obj.Rows_to_Skip_at_Top = 1
-                obj.Number_of_Hours_of_Data = 8760
-                obj.Minutes_per_Item = 60
+            obj = idf.newidfobject('Schedule:File')
+            schedule_object_name = f'ecobee setpoint'
+            obj.Name = schedule_object_name
+            obj.Schedule_Type_Limits_Name = 'Temperature'
+            obj.File_Name = setpoints_filepath
+            obj.Column_Number = 1
+            obj.Rows_to_Skip_at_Top = 1
+            obj.Number_of_Hours_of_Data = 8760
+            obj.Minutes_per_Item = 60
 
             for obj in idf.idfobjects['ThermostatSetpoint:DualSetpoint']:
-                obj.Cooling_Setpoint_Temperature_Schedule_Name = f'ecobee cooling setpoint'
-                obj.Heating_Setpoint_Temperature_Schedule_Name = f'ecobee heating setpoint'
-        
+                obj.Cooling_Setpoint_Temperature_Schedule_Name = f'ecobee setpoint'
+                obj.Heating_Setpoint_Temperature_Schedule_Name = f'ecobee setpoint'
         else:
             pass
 
         self.__simulator.idf = idf.idfstr()
+    
+    @staticmethod
+    def initialize_database(database):
+        database.query("""
+        CREATE TABLE IF NOT EXISTS energyplus_simulation (
+            id INTEGER NOT NULL,
+            metadata_id INTEGER NOT NULL,
+            reference INTEGER NOT NULL,
+            ecobee_building_id INTEGER,
+            PRIMARY KEY (id),
+            FOREIGN KEY (metadata_id) REFERENCES metadata (id)
+                ON DELETE NO ACTION
+                ON UPDATE CASCADE,
+            FOREIGN KEY (ecobee_building_id) REFERENCES ecobee_building (id)
+                ON DELETE NO ACTION
+                ON UPDATE CASCADE,
+            UNIQUE (metadata_id, reference)
+        );
+        CREATE TABLE IF NOT EXISTS energyplus_mechanical_system_simulation (
+            simulation_id INTEGER NOT NULL,
+            timestep INTEGER NOT NULL,
+            average_indoor_air_temperature REAL NOT NULL,
+            PRIMARY KEY (simulation_id, timestep),
+            FOREIGN KEY (simulation_id) REFERENCES energyplus_simulation (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS energyplus_ideal_system_simulation (
+            simulation_id INTEGER NOT NULL,
+            timestep INTEGER NOT NULL,
+            average_indoor_air_temperature REAL NOT NULL,
+            cooling_load REAL NOT NULL,
+            heating_load REAL NOT NULL,
+            PRIMARY KEY (simulation_id, timestep),
+            FOREIGN KEY (simulation_id) REFERENCES energyplus_simulation (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS lstm_train_data (
+            simulation_id INTEGER NOT NULL,
+            timestep INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            day INTEGER NOT NULL,
+            day_name TEXT NOT NULL,
+            day_of_week INTEGER NOT NULL,
+            hour INTEGER NOT NULL,
+            minute INTEGER NOT NULL,
+            direct_solar_radiation REAL NOT NULL,
+            outdoor_air_temperature REAL NOT NULL,
+            average_indoor_air_temperature REAL NOT NULL,
+            occupant_count INTEGER NOT NULL,
+            cooling_load REAL NOT NULL,
+            heating_load REAL NOT NULL,
+            PRIMARY KEY (simulation_id, timestep),
+            FOREIGN KEY (simulation_id) REFERENCES energyplus_simulation (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE
+        );""")
     
