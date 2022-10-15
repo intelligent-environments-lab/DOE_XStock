@@ -513,8 +513,6 @@ class MetadataClustering:
     def preprocess_metadata(self,metadata):
         # convert discrete variables to continuous
         # vintage
-        # - drop buildings pre-1940s and convert to integer
-        metadata = metadata[metadata['in_vintage']!='<1940'].copy()
         metadata['in_vintage'] = metadata['in_vintage'].str[0:-1].astype(int)
 
         # orientation
