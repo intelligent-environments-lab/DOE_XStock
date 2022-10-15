@@ -321,7 +321,7 @@ class MetadataClustering:
         """
         cls.__get_database(database_filepath).insert_batch([query], [data.to_dict('records')])
         data_filepath = f'{name}_neighborhood.csv' if data_filepath is None else data_filepath
-        data[['name','metadata_id','bldg_id','label']].to_csv(data_filepath, index=False)
+        data[['name','metadata_id','bldg_id','label']].to_csv(data_filepath, sep='|', index=False)
 
     @classmethod
     def plot_ground_truth(cls,name,n_clusters,database_filepath,figure_filepath=None):
