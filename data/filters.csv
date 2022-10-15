@@ -1,4 +1,4 @@
 neighborhood_id|filters
-TX, Travis County|{ "in_resstock_county_id": ["TX, Travis County"], "in_geometry_building_type_recs": ["Single-Family Detached"], "in_vacancy_status": ["Occupied"]}
-VT, Chittenden County|{"in_resstock_county_id": ["VT, Chittenden County"], "in_geometry_building_type_recs": ["Single-Family Detached"], "in_vacancy_status": ["Occupied"]}
-CA, Alameda County|{ "in_resstock_county_id": ["CA, Alameda County"], "in_geometry_building_type_recs": ["Single-Family Detached"], "in_vacancy_status": ["Occupied"]}
+TX, Travis County|{ "in_resstock_county_id": ["TX, Travis County"], "in_geometry_building_type_recs": ["Single-Family Detached"], "in_vacancy_status": ["Occupied"], "in_vintage": ["1940s", "1950s", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s"]}
+VT, Chittenden County|{"in_resstock_county_id": ["VT, Chittenden County"], "in_geometry_building_type_recs": ["Single-Family Detached"], "in_vacancy_status": ["Occupied"], "in_vintage": ["1940s", "1950s", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s"]}
+CA, Alameda County|{ "in_resstock_county_id": ["CA, Alameda County"], "in_geometry_building_type_recs": ["Single-Family Detached"], "in_vacancy_status": ["Occupied"], "in_vintage": ["1940s", "1950s", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s"]}
