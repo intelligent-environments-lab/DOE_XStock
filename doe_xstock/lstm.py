@@ -121,9 +121,12 @@ class TrainData:
         default_output_variables = [
             'Site Direct Solar Radiation Rate per Area','Site Outdoor Air Drybulb Temperature','Zone People Occupant Count',
             'Zone Air Temperature','Zone Thermostat Cooling Setpoint Temperature','Zone Thermostat Heating Setpoint Temperature',
+            'Zone Air Relative Humidity',
             'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate','Other Equipment Convective Heating Rate',
             'Zone Ideal Loads Zone Sensible Cooling Rate','Zone Ideal Loads Zone Sensible Heating Rate',
             'Zone Air System Sensible Cooling Rate','Zone Air System Sensible Heating Rate',
+            'Water Heater Use Side Heat Transfer Energy',
+            'Exterior Lights Electricity Energy','Lights Electricity Energy','Electric Equipment Electricity Energy',
         ]
         self.__output_variables =default_output_variables if output_variables is None else output_variables
 
@@ -493,7 +496,7 @@ class TrainData:
         INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
         LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
         WHERE d.Name = '{cooling_variable}' AND z.ZoneName IN ({','.join(cooled_zone_names)})
-        UNION
+        UNION ALL
         SELECT
             r.TimeIndex AS timestep,
             'heating' AS load,
