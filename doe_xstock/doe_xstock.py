@@ -113,7 +113,7 @@ class DOEXStock:
             FROM ecobee_timeseries
             WHERE building_id = {ecobee_id}
             ORDER BY
-                timestamp ASC
+                timestep ASC
             """).to_dict(orient='list')
         else:
             setpoints = None
@@ -172,6 +172,7 @@ class DOEXStock:
         ideal_loads_reference = 1
         ideal_loads_data_temp, partial_loads_data = ltd.simulate_partial_loads(ideal_loads_reference=ideal_loads_reference)
         ideal_loads_data = pd.DataFrame(ideal_loads_data_temp['load'])
+        ideal_loads_data = ideal_loads_data.groupby(['timestep'])[['cooling','heating']].sum().reset_index()
         ideal_loads_data['average_indoor_air_temperature'] = ideal_loads_data_temp['temperature']['value']
         ideal_loads_data['metadata_id'] = metadata_id
         queries.append(f"""
