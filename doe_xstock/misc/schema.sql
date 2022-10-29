@@ -509,21 +509,22 @@ CREATE TABLE IF NOT EXISTS ecobee_building (
     location_id INTEGER NOT NULL,
     "name" TEXT NOT NULL,
     FOREIGN KEY (location_id) REFERENCES ecobee_location (id)
-        ON DELETE NO ACTION
+        ON DELETE CASCADE
         ON UPDATE CASCADE,
     UNIQUE ("name")
 );
 
 CREATE TABLE IF NOT EXISTS ecobee_timeseries (
     building_id INTEGER NOT NULL,
-    "timestamp" TEXT NOT NULL,
+    timestep INTEGER NOT NULL,
     setpoint REAL NOT NULL,
-    PRIMARY KEY (building_id, "timestamp")
+    PRIMARY KEY (building_id, timestep)
     FOREIGN KEY (building_id) REFERENCES ecobee_building (id)
-        ON DELETE NO ACTION
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
+-- views
 DROP VIEW IF EXISTS xstock_ecobee_pair;
 CREATE VIEW xstock_ecobee_pair AS
     WITH x AS (
@@ -567,7 +568,6 @@ CREATE VIEW xstock_ecobee_pair AS
         AND e.row_number = x.ecobee_row_number
 ;
 
--- views
 DROP VIEW IF EXISTS energyplus_simulation_input;
 CREATE VIEW energyplus_simulation_input AS
     SELECT
@@ -590,4 +590,14 @@ CREATE VIEW energyplus_simulation_input AS
         AND w.weather_file_latitude = m.in_weather_file_latitude
         AND w.weather_file_longitude = m.in_weather_file_longitude
     LEFT JOIN xstock_ecobee_pair c ON c.xstock_metadata_id = m.id
+;
+
+CREATE VIEW thermal_zone_count AS
+    SELECT
+        metadata_id,
+        (
+            LENGTH(osm) 
+            - LENGTH(REPLACE(osm, 'OS:ThermostatSetpoint:DualSetpoint', ''))
+        )/LENGTH('OS:ThermostatSetpoint:DualSetpoint') AS value
+    from model
 ;
