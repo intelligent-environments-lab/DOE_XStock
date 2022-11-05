@@ -306,12 +306,12 @@ class DOEXStockDatabase(SQLiteDatabase):
             self.update_spatial_tract_table(dataset,dataset_id,buildings)
             LOGGER.info(f'Updating weather table.')
             self.update_weather_table(dataset_id,dataset,buildings)
-            LOGGER.info(f'Updating timeseries table.')
             
             # NOTE: Will skip downloading simulation time series to save on database size
+            # LOGGER.info(f'Updating timeseries table.')
             # self.update_timeseries_table(dataset,buildings)
-            # LOGGER.info(f'Updating model table.')
 
+            LOGGER.info(f'Updating model table.')
             self.update_model_table(dataset,buildings)
             LOGGER.info(f'Updating schedule table.')
             self.update_schedule_table(dataset,buildings)
@@ -441,8 +441,31 @@ class DOEXStockDatabase(SQLiteDatabase):
             ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3']
         )[['count']].sum().reset_index()
         locations = report['in_weather_file_tmy3'].unique().tolist()
+
+        # try to resolve unknown locations
         unknown_locations = buildings[buildings['energyplus_title'].isnull()]['in_weather_file_tmy3'].unique().tolist()
+
+        for l in unknown_locations:
+            match = [False, None]
+            
+            for  e in tmy3['energyplus_title'].tolist():
+                if l in e or l.replace('_','.') in e:
+                    match = [True, e]
+                    break
+                else:
+                    continue
+            
+            if match[0]:
+                unknown_locations.remove(l)
+                content = tuple(tmy3[tmy3['energyplus_title']==match[1]].iloc[0].tolist())
+                buildings.loc[buildings['in_weather_file_tmy3']==l, tuple(tmy3.columns.tolist())] = content
+            else:
+                pass
+        
+        # locations with multiple matches
         ambiguous_locations = report[report['count']>1]['in_weather_file_tmy3'].unique().tolist()
+
+        # filter out valid locations
         data = buildings[~buildings['in_weather_file_tmy3'].isin(unknown_locations+ambiguous_locations)].copy()
         LOGGER.info(f'Found {data.shape[0]}/{len(locations)} weather_file_tmy3.')
 
