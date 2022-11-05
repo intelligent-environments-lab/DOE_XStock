@@ -10,7 +10,7 @@ IFS='|'
     read
     while read -r neighborhood_id filters
     do
-        python -m doe_xstock
+        python -m doe_xstock \
             -d $DOE_XSTOCK_DATABASE_FILEPATH \
                 -t $DOE_XSTOCK_DATA_DIRECTORY \
                     -g $DOE_XSTOCK_FIGURE_DIRECTORY \
