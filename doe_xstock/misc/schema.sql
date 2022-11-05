@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS metadata (
     id INTEGER PRIMARY KEY NOT NULL,
     bldg_id INTEGER NOT NULL,
     dataset_id INTEGER NOT NULL REFERENCES dataset(id),
+    weather_id INTEGER NOT NULL REFERENCES weather(id),
     in_county TEXT,
     in_puma TEXT,
     in_ashrae_iecc_climate_zone_2004 TEXT,
@@ -584,11 +585,7 @@ CREATE VIEW energyplus_simulation_input AS
     FROM metadata m
     INNER JOIN dataset d ON d.id = m.dataset_id
     INNER JOIN model e ON e.metadata_id = m.id
-    INNER JOIN weather w ON
-        w.dataset_id = m.dataset_id
-        AND w.weather_file_tmy3 = m.in_weather_file_tmy3
-        AND w.weather_file_latitude = m.in_weather_file_latitude
-        AND w.weather_file_longitude = m.in_weather_file_longitude
+    INNER JOIN weather w ON w.id = m.weather_id
     LEFT JOIN xstock_ecobee_pair c ON c.xstock_metadata_id = m.id
 ;
 

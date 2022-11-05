@@ -436,6 +436,8 @@ class DOEXStockDatabase(SQLiteDatabase):
             ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3','in_nhgis_county_gisjoin']
         ).size().reset_index().iloc[:,0:-1]
         buildings = pd.merge(buildings,tmy3,on=['in_weather_file_latitude','in_weather_file_longitude'],how='left')
+        buildings['original_longitude'] = buildings['in_weather_file_longitude']
+        buildings['original_latitude'] = buildings['in_weather_file_latitude']
         buildings['count'] = 1
         report = buildings.groupby(
             ['in_weather_file_latitude','in_weather_file_longitude','in_weather_file_tmy3']
@@ -519,6 +521,26 @@ class DOEXStockDatabase(SQLiteDatabase):
                 data.to_records(index=False),
                 ['dataset_id','weather_file_tmy3','weather_file_latitude','weather_file_longitude']
             )
+
+            # update weather_id in metadata table
+            weather_data = self.query_table("""
+            SELECT
+                w.id AS weather_id,
+                w.energyplus_title
+            FROM weather w
+            """)
+            buildings = buildings.merge(weather_data,on='energyplus_title',how='inner')
+
+            for w, a, o, f, g in buildings.groupby(['weather_id','original_latitude','original_longitude','in_weather_file_tmy3','in_nhgis_county_gisjoin']):
+                self.query(f"""
+                UPDATE metadata
+                SET weather_id = {w}
+                WHERE
+                    in_weather_file_latitude = {a}
+                    AND in_weather_file_longitude = {o}
+                    AND in_weather_file_tmy3 = '{f}'
+                    AND in_nhgis_county_gisjoin = '{g}'
+                """)
 
         else:
             pass
