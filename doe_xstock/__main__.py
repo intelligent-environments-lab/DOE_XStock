@@ -20,6 +20,7 @@ def main():
     parser.add_argument('-g','--figure_directory',type=str,default='figures',dest='figure_directory',help='Figure directory.')
     parser.add_argument('-t','--data_directory',type=str,default='data',dest='data_directory',help='Data directory.')
     parser.add_argument('-u','--energyplus_output_directory',type=str,default='energyplus_output',dest='energyplus_output_directory',help='Directory to store energyplus simulations output to.')
+    parser.add_argument('-l','--lstm_train_data_directory',type=str,default='lstm_train_data',dest='lstm_train_data_directory',help='Directory to store LSTM train data to.')
     parser.add_argument('-o','--overwrite',default=False,action='store_true',dest='overwrite',help='Will overwrite database if it exists.')
     parser.add_argument('-a','--apply_changes',default=False,action='store_true',dest='apply_changes',help='Will apply new changes to database schema.')
     parser.add_argument('-i','--idd_filepath',default='/Applications/EnergyPlus-9-6-0/PreProcess/IDFVersionUpdater/V9-6-0-Energy+.idd',type=str,dest='idd_filepath',help='Energyplus IDD filepath.')
