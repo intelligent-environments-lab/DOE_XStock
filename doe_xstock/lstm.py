@@ -119,7 +119,8 @@ class TrainData:
     @output_variables.setter
     def output_variables(self,output_variables):
         default_output_variables = [
-            'Site Direct Solar Radiation Rate per Area','Site Outdoor Air Drybulb Temperature','Zone People Occupant Count',
+            'Site Direct Solar Radiation Rate per Area', 'Site Diffuse Solar Radiation Rate per Area',
+            'Site Outdoor Air Drybulb Temperature','Zone People Occupant Count',
             'Zone Air Temperature','Zone Thermostat Cooling Setpoint Temperature','Zone Thermostat Heating Setpoint Temperature',
             'Zone Air Relative Humidity',
             'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate','Other Equipment Convective Heating Rate',
@@ -216,7 +217,7 @@ class TrainData:
                 r.Value
             FROM ReportData r
             LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-            WHERE d.Name IN ('Site Direct Solar Radiation Rate per Area', 'Site Outdoor Air Drybulb Temperature')
+            WHERE d.Name IN ('Site Direct Solar Radiation Rate per Area', 'Site Diffuse Solar Radiation Rate per Area', 'Site Outdoor Air Drybulb Temperature')
 
             UNION
 
@@ -271,6 +272,7 @@ class TrainData:
             SELECT
                 s.TimeIndex,
                 MAX(CASE WHEN d.Name = 'Site Direct Solar Radiation Rate per Area' THEN Value END) AS direct_solar_radiation,
+                MAX(CASE WHEN d.Name = 'Site Diffuse Solar Radiation Rate per Area' THEN Value END) AS direct_solar_radiation,
                 MAX(CASE WHEN d.Name = 'Site Outdoor Air Drybulb Temperature' THEN Value END) AS outdoor_air_temperature,
                 MAX(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS average_indoor_air_temperature,
                 MAX(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS occupant_count,
@@ -299,6 +301,7 @@ class TrainData:
             t.Hour AS hour,
             t.Minute AS minute,
             p.direct_solar_radiation,
+            p.diffuse_solar_radiation,
             p.outdoor_air_temperature,
             p.average_indoor_air_temperature,
             p.occupant_count,
@@ -309,8 +312,6 @@ class TrainData:
         WHERE t.DayType NOT IN ('SummerDesignDay', 'WinterDesignDay')
         """
         data = simulator.get_database().query_table(query)
-        filepath = os.path.join(simulator.output_directory,f'{simulator.simulation_id}_summary.csv')
-        data.to_csv(filepath,index=False)
         data = data.to_dict('list')
         _ = data.pop('index',None)
         
@@ -784,6 +785,7 @@ class TrainData:
             hour INTEGER NOT NULL,
             minute INTEGER NOT NULL,
             direct_solar_radiation REAL NOT NULL,
+            diffuse_solar_radiation REAL NOT NULL,
             outdoor_air_temperature REAL NOT NULL,
             average_indoor_air_temperature REAL NOT NULL,
             occupant_count INTEGER NOT NULL,
