@@ -219,7 +219,7 @@ class TrainData:
             LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
             WHERE d.Name IN ('Site Direct Solar Radiation Rate per Area', 'Site Diffuse Solar Radiation Rate per Area', 'Site Outdoor Air Drybulb Temperature')
 
-            UNION
+            UNION ALL
 
             -- weighted conditioned zone variables
             SELECT
@@ -231,7 +231,7 @@ class TrainData:
             LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
             WHERE d.Name IN ('Zone Air Temperature')
 
-            UNION
+            UNION ALL
 
             -- thermal load variables
             SELECT
@@ -245,7 +245,7 @@ class TrainData:
                 d.Name = 'Other Equipment Convective Heating Rate' AND
                 (d.KeyValue LIKE '%HEATING LOAD' OR d.KeyValue LIKE '%COOLING LOAD')
 
-            UNION
+            UNION ALL
 
             -- other variables
             SELECT
@@ -257,30 +257,19 @@ class TrainData:
             LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
             WHERE 
                 d.Name = 'Zone People Occupant Count'
-        ), s AS (
-            SELECT
-                TimeIndex,
-                ReportDataDictionaryIndex,
-                label,
-                SUM(Value) AS Value
-            FROM u
-            GROUP BY
-                TimeIndex,
-                ReportDataDictionaryIndex,
-                label
         ), p AS (
             SELECT
-                s.TimeIndex,
+                u.TimeIndex,
                 MAX(CASE WHEN d.Name = 'Site Direct Solar Radiation Rate per Area' THEN Value END) AS direct_solar_radiation,
-                MAX(CASE WHEN d.Name = 'Site Diffuse Solar Radiation Rate per Area' THEN Value END) AS direct_solar_radiation,
+                MAX(CASE WHEN d.Name = 'Site Diffuse Solar Radiation Rate per Area' THEN Value END) AS diffuse_solar_radiation,
                 MAX(CASE WHEN d.Name = 'Site Outdoor Air Drybulb Temperature' THEN Value END) AS outdoor_air_temperature,
-                MAX(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS average_indoor_air_temperature,
-                MAX(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS occupant_count,
-                MAX(CASE WHEN s.label = 'cooling_load' THEN Value END) AS cooling_load,
-                MAX(CASE WHEN s.label = 'heating_load' THEN Value END) AS heating_load
-            FROM s
-            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = s.ReportDataDictionaryIndex
-            GROUP BY TimeIndex
+                SUM(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS average_indoor_air_temperature,
+                SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS occupant_count,
+                SUM(CASE WHEN u.label = 'cooling_load' THEN Value END) AS cooling_load,
+                SUM(CASE WHEN u.label = 'heating_load' THEN Value END) AS heating_load
+            FROM u
+            LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = u.ReportDataDictionaryIndex
+            GROUP BY u.TimeIndex
         )
         SELECT
             t.TimeIndex AS timestep,
