@@ -68,7 +68,7 @@ class DOEXStock:
 
         # store simulation variables
         simulation_output_directory = kwargs.get('energyplus_output_directory','energyplus_output')
-        simulation_output_directory
+        lstm_train_data_directory = kwargs.get('lstm_train_data_directory', 'lstm_train_data')
         idd_filepath = kwargs['idd_filepath']
         iterations = kwargs.get('iterations',4)
         max_workers = iterations + 1
@@ -211,6 +211,43 @@ class DOEXStock:
         );""")
         values.append(partial_loads_data.to_dict('records'))
         database.insert_batch(queries, values)
+
+        # save lstm data
+        os.makedirs(lstm_train_data_directory, exist_ok=True)
+        database.query_table(f"""
+        SELECT
+            m.in_resstock_county_id AS location,
+            m.bldg_id AS resstock_building_id,
+            b.name AS ecobee_building_id,
+            s.reference AS simulation_reference,
+            l.timestep,
+            l.month,
+            l.day,
+            l.day_of_week,
+            l.hour,
+            l.minute,
+            l.direct_solar_radiation,
+            l.diffuse_solar_radiation,
+            l.outdoor_air_temperature,
+            e.setpoint,
+            l.average_indoor_air_temperature,
+            l.occupant_count,
+            l.cooling_load,
+            l.heating_load,
+            l.cooling_load/i.cooling_load AS ideal_cooling_load_proportion,
+            l.heating_load/i.heating_load AS ideal_heating_load_proportion
+        FROM lstm_train_data l
+        LEFT JOIN energyplus_simulation s ON
+            s.id = l.simulation_id
+        LEFT JOIN (SELECT * FROM energyplus_simulation WHERE reference = 1) h ON 
+            h.metadata_id = s.metadata_id
+        LEFT JOIN energyplus_ideal_system_simulation i ON 
+            i.simulation_id = h.id AND i.timestep = l.timestep
+        LEFT JOIN ecobee_timeseries e ON e.timestep = l.timestep AND e.building_id = s.ecobee_building_id
+        LEFT JOIN ecobee_building b ON b.id = e.building_id
+        LEFT JOIN metadata m ON m.id = s.metadata_id
+        WHERE s.metadata_id = {metadata_id}
+        """).to_csv(f'{bldg_id}.csv', index=False)
 
     @staticmethod    
     def simulate(**kwargs):
