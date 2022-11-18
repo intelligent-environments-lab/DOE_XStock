@@ -120,7 +120,7 @@ class TrainData:
     def output_variables(self,output_variables):
         default_output_variables = [
             'Site Direct Solar Radiation Rate per Area', 'Site Diffuse Solar Radiation Rate per Area',
-            'Site Outdoor Air Drybulb Temperature','Zone People Occupant Count',
+            'Site Outdoor Air Drybulb Temperature', 'Site Outdoor Air Relative Humidity', 'Zone People Occupant Count',
             'Zone Air Temperature','Zone Thermostat Cooling Setpoint Temperature','Zone Thermostat Heating Setpoint Temperature',
             'Zone Air Relative Humidity',
             'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate','Other Equipment Convective Heating Rate',
