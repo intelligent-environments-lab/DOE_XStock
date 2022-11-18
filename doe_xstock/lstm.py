@@ -126,6 +126,9 @@ class TrainData:
             'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate','Other Equipment Convective Heating Rate',
             'Zone Ideal Loads Zone Sensible Cooling Rate','Zone Ideal Loads Zone Sensible Heating Rate',
             'Zone Air System Sensible Cooling Rate','Zone Air System Sensible Heating Rate',
+            'Zone Predicted Sensible Load to Setpoint Heat Transfer Energy','Other Equipment Convective Heating Energy',
+            'Zone Ideal Loads Zone Sensible Cooling Energy','Zone Ideal Loads Zone Sensible Heating Energy',
+            'Zone Air System Sensible Cooling Energy','Zone Air System Sensible Heating Energy',
             'Water Heater Use Side Heat Transfer Energy',
             'Exterior Lights Electricity Energy','Lights Electricity Energy','Electric Equipment Electricity Energy',
         ]
@@ -553,7 +556,7 @@ class TrainData:
             FROM ReportData r
             LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
             INNER JOIN (SELECT * FROM zone_metadata WHERE is_cooled + is_heated >= 1) z ON z.zone_name = d.KeyValue
-            WHERE d.Name IN ('Zone Air Temperature')
+            WHERE d.Name IN ('Zone Air Temperature', 'Zone Air Relative Humidity')
         ;
         """
         simulator.get_database().query(query)
