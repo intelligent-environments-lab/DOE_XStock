@@ -247,7 +247,7 @@ class DOEXStock:
         LEFT JOIN ecobee_building b ON b.id = e.building_id
         LEFT JOIN metadata m ON m.id = s.metadata_id
         WHERE s.metadata_id = {metadata_id}
-        """).to_csv(f'{bldg_id}.csv', index=False)
+        """).to_csv(os.path.join(lstm_train_data_directory, f'{simulation_id}.csv'), index=False)
 
     @staticmethod    
     def simulate(**kwargs):
