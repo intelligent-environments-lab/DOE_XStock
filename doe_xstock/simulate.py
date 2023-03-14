@@ -20,7 +20,7 @@ class OpenStudioModelEditor:
         self.__osm = get_data_from_path(osm)
 
     def forward_translate(self):
-        osm = self.__get_model()
+        osm = self.get_model()
         forward_translator = energyplus.ForwardTranslator()
         idf = forward_translator.translateModel(osm)
         idf = str(idf)
@@ -28,7 +28,7 @@ class OpenStudioModelEditor:
 
     def use_ideal_loads_air_system(self):
         # Reference: https://www.rubydoc.info/gems/openstudio-standards/Standard#remove_hvac-instance_method
-        osm = self.__get_model()
+        osm = self.get_model()
 
         # remove air loop hvac
         for air_loop in osm.getAirLoopHVACs():
@@ -81,7 +81,7 @@ class OpenStudioModelEditor:
         osm = str(osm)
         self.osm = osm
 
-    def __get_model(self):
+    def get_model(self):
         version_translator = osversion.VersionTranslator()
         osm = version_translator.loadModelFromString(self.osm).get()
         return osm
