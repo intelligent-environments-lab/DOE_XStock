@@ -136,7 +136,7 @@ class TrainData:
 
     @timesteps_per_hour.setter
     def timesteps_per_hour(self,timesteps_per_hour):
-        self.__timesteps_per_hour = timesteps_per_hour = 4 if timesteps_per_hour is None else timesteps_per_hour
+        self.__timesteps_per_hour = timesteps_per_hour = 1 if timesteps_per_hour is None else timesteps_per_hour
 
     @iterations.setter
     def iterations(self,iterations):
