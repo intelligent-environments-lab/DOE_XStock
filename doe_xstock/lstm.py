@@ -136,7 +136,7 @@ class TrainData:
 
     @timesteps_per_hour.setter
     def timesteps_per_hour(self,timesteps_per_hour):
-        self.__timesteps_per_hour = timesteps_per_hour = 1 if timesteps_per_hour is None else timesteps_per_hour
+        self.__timesteps_per_hour = timesteps_per_hour = 4 if timesteps_per_hour is None else timesteps_per_hour
 
     @iterations.setter
     def iterations(self,iterations):
@@ -518,7 +518,8 @@ class TrainData:
         GROUP BY r.TimeIndex
         """
         self.__insert_zone_metadata(self.__simulator)
-        data = self.__simulator.get_database().query_table(query).to_dict(orient='list')
+        data = self.__simulator.get_database().query_table(query)
+        data = data.to_dict(orient='list')
         data.pop('index',None)
         ideal_loads_data['temperature'] = deepcopy(data)
         
@@ -702,7 +703,6 @@ class TrainData:
         if self.ideal_loads_air_system:
             for obj in idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem']:
                 obj.Dehumidification_Control_Type = 'None'
-                obj.Cooling_Sensible_Heat_Ratio = 1.0
         else:
             pass
 
