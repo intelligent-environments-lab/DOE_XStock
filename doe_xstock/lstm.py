@@ -511,7 +511,7 @@ class TrainData:
         query = """
         SELECT
             r.TimeIndex AS timestep,
-            SUM(r.Value) AS value
+            SUM(r.Value) AS temperature
         FROM weighted_variable r
         LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
         WHERE d.Name IN ('Zone Air Temperature')
@@ -751,6 +751,8 @@ class TrainData:
             simulation_id INTEGER NOT NULL,
             timestep INTEGER NOT NULL,
             average_indoor_air_temperature REAL NOT NULL,
+            cooling_load REAL NOT NULL,
+            heating_load REAL NOT NULL,
             PRIMARY KEY (simulation_id, timestep),
             FOREIGN KEY (simulation_id) REFERENCES energyplus_simulation (id)
                 ON DELETE CASCADE
