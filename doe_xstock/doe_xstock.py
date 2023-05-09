@@ -5,6 +5,7 @@ import io
 import logging
 import logging.config
 import os
+import shutil
 import uuid
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -69,7 +70,6 @@ class DOEXStock:
 
         # store simulation variables
         simulation_output_directory = kwargs.get('energyplus_output_directory','energyplus_output')
-        lstm_train_data_directory = kwargs.get('lstm_train_data_directory', 'lstm_train_data')
         idd_filepath = kwargs['idd_filepath']
         iterations = kwargs.get('iterations',4)
         max_workers = iterations + 1
@@ -122,7 +122,12 @@ class DOEXStock:
         # simulation ID is built from dataset reference and bldg_id
         simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'\
             if kwargs.get('simulation_id') is None else kwargs['simulation_id']
-        output_directory = os.path.join(simulation_output_directory,f'output_{simulation_id}')
+        output_directory = os.path.join(simulation_output_directory, f'{simulation_id}')
+        
+        if os.path.isdir(output_directory):
+            shutil.rmtree(output_directory)
+        else:
+            pass
         
         # initialize lstm train data class
         ltd = TrainData(
@@ -131,9 +136,7 @@ class DOEXStock:
             simulation_data['epw'],
             schedules,
             setpoints=setpoints,
-            ideal_loads_air_system=False,
-            edit_ems=True,
-            seed=kwargs.get('seed',simulation_id),
+            seed=kwargs.get('seed', simulation_id),
             iterations=iterations,
             max_workers=max_workers,
             simulation_id=simulation_id,
@@ -147,56 +150,8 @@ class DOEXStock:
         DELETE FROM energyplus_simulation WHERE metadata_id = {metadata_id};
         """)
         
-        # first simulation is to get the weighted average temperature for the as-is model (mechanical system loads)
-        mechanical_loads_reference = 0
-        ltd.update_kwargs('simulation_id',f'{ltd.kwargs["simulation_id"]}-{mechanical_loads_reference}-mechanical')
-        ltd.update_kwargs('output_directory',f'{ltd.kwargs["output_directory"]}-{mechanical_loads_reference}-mechanical')
-        mechanical_temperature_data = pd.DataFrame(ltd.get_ideal_loads_data()['temperature'])
-        mechanical_loads_data = pd.DataFrame(ltd.get_ideal_loads_data()['load'])
-        mechanical_loads_data = mechanical_loads_data.groupby(['timestep', 'zone_name'])[['cooling', 'heating']].sum().reset_index()
-        mechanical_loads_data = mechanical_loads_data.merge(mechanical_temperature_data, on='timestep', how='left')
-        mechanical_loads_data['metadata_id'] = metadata_id
-        queries.append(f"""
-        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
-        VALUES (:metadata_id, {mechanical_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
-        ;""")
-        values.append(mechanical_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
-        queries.append(f"""
-        INSERT INTO energyplus_mechanical_system_simulation (simulation_id, timestep, average_indoor_air_temperature, cooling_load, heating_load)
-        VALUES (
-            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {mechanical_loads_reference}),
-            :timestep, :temperature, :cooling, :heating
-        );""")
-        values.append(mechanical_loads_data.to_dict('records'))
-        
         # run ideal air loads system and other equipment simulations
-        ltd.update_kwargs('simulation_id',simulation_id)
-        ltd.update_kwargs('output_directory',output_directory)
-        ltd.ideal_loads_air_system = True
-        ideal_loads_reference = 1
-        ideal_loads_data_temp, partial_loads_data = ltd.simulate_partial_loads(ideal_loads_reference=ideal_loads_reference)
-
-        if ltd.ideal_loads_air_system:
-            ideal_loads_data = pd.DataFrame(ideal_loads_data_temp['load'])
-            ideal_loads_data = ideal_loads_data.groupby(['timestep'])[['cooling','heating']].sum().reset_index()
-            ideal_loads_data['average_indoor_air_temperature'] = ideal_loads_data_temp['temperature']['temperature']
-            ideal_loads_data['metadata_id'] = metadata_id
-            queries.append(f"""
-            INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
-            VALUES (:metadata_id, {ideal_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
-            ;""")
-            values.append(ideal_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
-            queries.append(f"""
-            INSERT INTO energyplus_ideal_system_simulation (simulation_id, timestep, average_indoor_air_temperature, cooling_load, heating_load)
-            VALUES (
-                (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {ideal_loads_reference}),
-                :timestep, :average_indoor_air_temperature, :cooling, :heating
-            );""")
-            values.append(ideal_loads_data.to_dict('records'))
-        
-        else:
-            pass
-
+        partial_loads_data = ltd.simulate_partial_loads()
         for simulation_id, data in partial_loads_data.items():
             data = pd.DataFrame(data)
             data['metadata_id'] = metadata_id
@@ -211,52 +166,15 @@ class DOEXStock:
         values.append(partial_loads_data.groupby(['metadata_id','reference']).size().reset_index().to_dict('records'))
         queries.append(f"""
         INSERT INTO lstm_train_data (
-            simulation_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation,
-            outdoor_air_temperature, average_indoor_air_temperature, occupant_count, cooling_load, heating_load
+            simulation_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation, diffuse_solar_radiation,
+            outdoor_air_temperature, average_indoor_air_temperature, occupant_count, cooling_load, heating_load, setpoint
         ) VALUES (
             (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = :reference),
-            :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation,
-            :outdoor_air_temperature, :average_indoor_air_temperature, :occupant_count, :cooling_load, :heating_load
+            :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation, :diffuse_solar_radiation,
+            :outdoor_air_temperature, :average_indoor_air_temperature, :occupant_count, :cooling_load, :heating_load, :setpoint
         );""")
         values.append(partial_loads_data.to_dict('records'))
         database.insert_batch(queries, values)
-
-        # save lstm data
-        os.makedirs(lstm_train_data_directory, exist_ok=True)
-        database.query_table(f"""
-        SELECT
-            m.in_resstock_county_id AS location,
-            m.bldg_id AS resstock_building_id,
-            b.name AS ecobee_building_id,
-            s.reference AS simulation_reference,
-            l.timestep,
-            l.month,
-            l.day,
-            l.day_of_week,
-            l.hour,
-            l.minute,
-            l.direct_solar_radiation,
-            l.diffuse_solar_radiation,
-            l.outdoor_air_temperature,
-            e.setpoint,
-            l.average_indoor_air_temperature,
-            l.occupant_count,
-            l.cooling_load,
-            l.heating_load,
-            l.cooling_load/i.cooling_load AS ideal_cooling_load_proportion,
-            l.heating_load/i.heating_load AS ideal_heating_load_proportion
-        FROM lstm_train_data l
-        LEFT JOIN energyplus_simulation s ON
-            s.id = l.simulation_id
-        LEFT JOIN (SELECT * FROM energyplus_simulation WHERE reference = 1) h ON 
-            h.metadata_id = s.metadata_id
-        LEFT JOIN energyplus_ideal_system_simulation i ON 
-            i.simulation_id = h.id AND i.timestep = l.timestep
-        LEFT JOIN ecobee_timeseries e ON e.timestep = l.timestep AND e.building_id = s.ecobee_building_id
-        LEFT JOIN ecobee_building b ON b.id = e.building_id
-        LEFT JOIN metadata m ON m.id = s.metadata_id
-        WHERE s.metadata_id = {metadata_id}
-        """).to_csv(os.path.join(lstm_train_data_directory, f'{simulation_id}.csv'), index=False)
 
     @staticmethod    
     def simulate(**kwargs):
