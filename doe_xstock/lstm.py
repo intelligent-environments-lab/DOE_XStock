@@ -17,7 +17,7 @@ logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_a')
 
 class TrainData:
-    def __init__(self,idd_filepath,osm,epw,schedules,setpoints=None,ideal_loads_air_system=None,edit_ems=None,output_variables=None,timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs):
+    def __init__(self,idd_filepath,osm,epw,schedules,setpoints,ideal_loads_air_system=None,edit_ems=None,output_variables=None,timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs):
         self.idd_filepath = idd_filepath
         self.osm = osm
         self.epw = epw
@@ -168,23 +168,9 @@ class TrainData:
 
     def simulate_partial_loads(self,**kwargs):
         LOGGER.info('Started simulation.')
-        ideal_loads_reference = kwargs.get('ideal_loads_reference',1)
-
-        if self.ideal_loads_air_system:
-            initial_simulation_id = self.kwargs["simulation_id"]
-            initial_output_directory = self.kwargs["output_directory"]
-            self.__kwargs['simulation_id'] = f'{self.kwargs["simulation_id"]}-{ideal_loads_reference}-ideal'
-            self.__kwargs['output_directory'] = f'{self.kwargs["output_directory"]}-{ideal_loads_reference}-ideal'
-            self.__set_ideal_loads(**kwargs)
-            self.__kwargs['simulation_id'] = initial_simulation_id
-            self.__kwargs['output_directory'] = initial_output_directory
-        
-        else:
-            pass
-
-        self.__transform_idf()
-        seeds = [None] + [i for i in range(self.iterations + 1)]
-        simulators = [self.__get_partial_load_simulator(i + ideal_loads_reference + 1,seed=s) for i, s in enumerate(seeds)]
+        self.__set_simulator()
+        seeds = [i for i in range(self.iterations + 2)]
+        simulators = [self.__get_partial_load_simulator(i, seed=s) for i, s in enumerate(seeds)]
         LOGGER.debug('Simulating partial load iterations.')
         Simulator.multi_simulate(simulators,max_workers=self.max_workers)
         self.__partial_loads_data = {}
@@ -329,165 +315,47 @@ class TrainData:
         return simulator.simulation_id, data
 
     def __get_partial_load_simulator(self,reference,seed=None):
-        # get multiplier
-        size = len(self.__ideal_loads_data['load']['timestep'])
-
-        if seed is None:
-            multiplier = [1.0]*size
-        elif seed == 0:
-            multiplier = [0.0]*size
-        else:
-            multiplier = self.get_multipliers(size,seed=seed)
-        
-        multiplier = pd.DataFrame(multiplier,columns=['multiplier'])
-        multiplier['timestep'] = multiplier.index + 1
-
-        # set load schedule file
-        data = pd.DataFrame(self.__ideal_loads_data['load'])
-        data = data.merge(multiplier,on='timestep',how='left')
-        data = data.sort_values(['zone_name','timestep'])
-        data['cooling'] *= data['multiplier']*-1
-        data['heating'] *= data['multiplier']
-
-        # save load schedule file
-        simulation_id = f'{self.kwargs["simulation_id"]}-{reference}-partial'
-        output_directory = f'{self.kwargs["output_directory"]}-{reference}-partial'
-        filepath = os.path.join(output_directory,f'{simulation_id}_partial_load.csv')
-        os.makedirs(output_directory,exist_ok=True)
-        data[['cooling','heating']].to_csv(filepath,index=False)
-
-        # set idf
         idf = self.__simulator.get_idf_object()
-
-        # set load schedule
-        for obj in idf.idfobjects['Schedule:File']:
-            if 'lstm' in obj.Name.lower():
-                obj.File_Name = filepath
-            else:
-                continue
+        output_directory = f'{self.kwargs["output_directory"]}-{reference}-partial'
+        simulation_id = f'{self.kwargs["simulation_id"]}-{reference}-partial'
         
-        # convert idf to string
+        # update setpoints
+        setpoints_filepath = os.path.join(self.__simulator.output_directory, f'{simulation_id}_setpoint.csv')
+        setpoints = pd.DataFrame(self.setpoints)
+        size = setpoints.shape[0]
+
+        if seed > 0:
+            setpoints += self.get_addition(size, seed=seed)
+        else:
+            pass
+        
+        obj = idf.newidfobject('Schedule:File')
+        schedule_object_name = f'ecobee setpoint'
+        obj.Name = schedule_object_name
+        obj.Schedule_Type_Limits_Name = 'Temperature'
+        obj.File_Name = setpoints_filepath
+        obj.Column_Number = 1
+        obj.Rows_to_Skip_at_Top = 1
+        obj.Number_of_Hours_of_Data = len(setpoints)
+        obj.Minutes_per_Item = 60
+
+        for obj in idf.idfobjects['ThermostatSetpoint:DualSetpoint']:
+            obj.Cooling_Setpoint_Temperature_Schedule_Name = f'ecobee setpoint'
+            obj.Heating_Setpoint_Temperature_Schedule_Name = f'ecobee setpoint'
+
+        setpoints.to_csv(setpoints_filepath, index=False)
         idf = idf.idfstr()
-        idf = idf.replace(self.__simulator.simulation_id,simulation_id)
-        
-        # update setpoint schedule filename
-        source_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_setpoint.csv')
-        destination_filepath = os.path.join(output_directory,f'{simulation_id}_setpoint.csv')
-        _ =shutil.copy2(source_filepath,destination_filepath)
-
-        # update equipment schedule filename
-        source_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_schedules.csv')
-        destination_filepath = os.path.join(output_directory,f'{simulation_id}_schedules.csv')
-        _ =shutil.copy2(source_filepath,destination_filepath)
+        # replace any instance of the default simulation id with new id
+        idf = idf.replace(self.__simulator.simulation_id, simulation_id)
 
         return Simulator(self.idd_filepath,idf,self.epw,simulation_id=simulation_id,output_directory=output_directory)
-    
-    def __transform_idf(self):
-        control_objects = [
-            'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort', 'ThermostatSetpoint:DualSetpoint',
-            'ZoneControl:Thermostat:OperativeTemperature','ZoneControl:Thermostat:TemperatureAndHumidity','ZoneControl:Thermostat:StagedDualSetpoint'
-        ]
-        hvac_equipment_objects = [n.upper() for n in [
-            'AirTerminal:SingleDuct:Uncontrolled','Fan:ZoneExhaust','ZoneHVAC:Baseboard:Convective:Electric','ZoneHVAC:Baseboard:Convective:Water','ZoneHVAC:Baseboard:RadiantConvective:Electric','ZoneHVAC:Baseboard:RadiantConvective:Water',
-            'ZoneHVAC:Baseboard:RadiantConvective:Steam','ZoneHVAC:Dehumidifier:DX','ZoneHVAC:EnergyRecoveryVentilator','ZoneHVAC:FourPipeFanCoil',
-            'ZoneHVAC:HighTemperatureRadiant','ZoneHVAC:LowTemperatureRadiant:ConstantFlow','ZoneHVAC:LowTemperatureRadiant:Electric',
-            'ZoneHVAC:LowTemperatureRadiant:VariableFlow','ZoneHVAC:OutdoorAirUnit','ZoneHVAC:PackagedTerminalAirConditioner',
-            'ZoneHVAC:PackagedTerminalHeatPump','ZoneHVAC:RefrigerationChillerSet','ZoneHVAC:UnitHeater','ZoneHVAC:UnitVentilator',
-            'ZoneHVAC:WindowAirConditioner','ZoneHVAC:WaterToAirHeatPump','ZoneHVAC:VentilatedSlab',
-            'AirTerminal:DualDuct:ConstantVolume','AirTerminal:DualDuct:VAV','AirTerminal:DualDuct:VAV:OutdoorAir',
-            'AirTerminal:SingleDuct:ConstantVolume:Reheat','AirTerminal:SingleDuct:VAV:Reheat','AirTerminal:SingleDuct:VAV:NoReheat',
-            'AirTerminal:SingleDuct:SeriesPIU:Reheat','AirTerminal:SingleDuct:ParallelPIU:Reheat'
-            'AirTerminal:SingleDuct:ConstantVolume:FourPipeInduction','AirTerminal:SingleDuct:VAV:Reheat:VariableSpeedFan',
-            'AirTerminal:SingleDuct:VAV:HeatAndCool:Reheat','AirTerminal:SingleDuct:VAV:HeatAndCool:NoReheat',
-            'AirLoopHVAC:UnitarySystem','ZoneHVAC:IdealLoadsAirSystem','HVACTemplate:Zone:IdealLoadsAirSystem',
-            'Fan:OnOff', 'Coil:Cooling:DX:SingleSpeed', 'Coil:Heating:Electric', 'Coil:Heating:DX:SingleSpeed',
-            'AirLoopHVAC:UnitarySystem', 'AirTerminal:SingleDuct:ConstantVolume:NoReheat'
-        ]]
 
-        # generate idf for simulations with partial loads
-        idf = self.__simulator.get_idf_object()
-
-        # remove Ideal Air Loads System if any
-        if self.ideal_loads_air_system:
-            idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem'] = []
-
-            for name in control_objects:
-                idf.idfobjects[name] = []
-
-        else:
-            # set hvac equipment availability to always off
-            schedule_name = 'Always Off Discrete'
-
-            for name in hvac_equipment_objects:
-                if name in idf.idfobjects.keys():
-                    for obj in idf.idfobjects[name]:
-                        try:
-                            obj.Availability_Schedule_Name = schedule_name
-                        except BadEPFieldError:
-                            obj.System_Availability_Schedule_Name = schedule_name
-                else:
-                    continue
-
-        # schedule type limit object
-        schedule_type_limit_name = 'other equipment hvac power'
-        obj = idf.newidfobject('ScheduleTypeLimits')
-        obj.Name = schedule_type_limit_name
-        obj.Lower_Limit_Value = ''
-        obj.Upper_Limit_Value = ''
-        obj.Numeric_Type = 'Continuous'
-        obj.Unit_Type = 'Dimensionless'
-
-        # generate stochastic thermal load
-        zone_names = set(self.__ideal_loads_data['load']['zone_name'])
-        timesteps = max(self.__ideal_loads_data['load']['timestep'])
-        loads = ['cooling','heating']
-        
-        for i, zone_name in enumerate(zone_names):
-            for j, load in enumerate(loads):
-                # put schedule obj
-                obj = idf.newidfobject('Schedule:File')
-                schedule_object_name = f'{zone_name} lstm {load} load'
-                obj.Name = schedule_object_name
-                obj.Schedule_Type_Limits_Name = schedule_type_limit_name
-                obj.File_Name = ''
-                obj.Column_Number = j + 1
-                obj.Rows_to_Skip_at_Top = 1 + i*timesteps
-                obj.Number_of_Hours_of_Data = 8760
-                obj.Minutes_per_Item = int(60/self.timesteps_per_hour)
-
-                # put other equipment
-                obj = idf.newidfobject('OtherEquipment')
-                obj.Name = f'{zone_name} {load} load'
-                obj.Fuel_Type = 'None'
-                obj.Zone_or_ZoneList_or_Space_or_SpaceList_Name = zone_name
-                obj.Schedule_Name = schedule_object_name
-                obj.Design_Level_Calculation_Method = 'EquipmentLevel'
-                obj.Design_Level = 1.0
-                obj.Fraction_Latent = 0.0
-                obj.Fraction_Radiant = 0.0
-                obj.Fraction_Lost = 0.0
-                obj.EndUse_Subcategory = f'lstm {load}'
-
-        self.__simulator.idf = idf.idfstr()
-
-    def get_multipliers(self,size,seed=0,minimum_value=0.3,maximum_value=1.7,probability=0.85):
+    def get_addition(self, size, seed=0, minimum_value=-6.0, maximum_value=6.0, probability=0.85):
         np.random.seed(seed)
         schedule = np.random.uniform(minimum_value, maximum_value, size)
-        schedule[np.random.random(size) > probability] = 1.0
+        schedule[np.random.random(size) > probability] = 0.0
         schedule = schedule.tolist()
         return schedule
-
-    def get_ideal_loads_data(self,**kwargs):
-        self.__set_ideal_loads(**kwargs)
-        return self.__ideal_loads_data
-
-    def __set_ideal_loads(self,**kwargs):
-        LOGGER.debug('Simulating ideal loads.')
-        self.__set_simulator()
-        self.__simulate_ideal_loads(**kwargs)
-        self.__set_zones()
-        self.__set_ideal_loads_data()
-        LOGGER.debug('Finished simulating ideal loads.')
 
     def __set_ideal_loads_data(self):
         ideal_loads_data = {}
@@ -638,48 +506,8 @@ class TrainData:
         data = self.__simulator.get_database().query_table(query)
         self.__zones = {z['zone_name']:z for z in data.to_dict('records')}
 
-    def __simulate_ideal_loads(self,**kwargs):
-        found_objs = True
-
-        while True:
-            removed_objs = {}
-            edited_objs = {}
-
-            try:
-                self.__simulator.simulate()
-                break
-
-            except EnergyPlusRunError as e:
-                if self.ideal_loads_air_system and (self.__simulator.has_ems_input_error() or self.__simulator.has_ems_program_error()) and found_objs:
-                    try:
-                        removed_objs = self.__simulator.remove_ems_objs_in_error(patterns=kwargs.get('patterns',None))
-                        
-                        if self.edit_ems:
-                            edited_objs = self.__simulator.redefine_ems_program_in_line_error()
-                        else:
-                            removed_objs = {**removed_objs,**self.__simulator.remove_ems_program_objs_in_line_error()}
-
-                        found_objs = len(removed_objs) + len(edited_objs) > 0
-                        LOGGER.debug(f'Removed objs: {removed_objs}')
-                        LOGGER.debug(f'Edited objs: {edited_objs}')
-                        LOGGER.debug('Rerunning sim.')
-                    
-                    except Exception as e:
-                        LOGGER.exception(e)
-                        raise e
-                
-                else:
-                    LOGGER.exception(e)
-                    raise e
-
     def __set_simulator(self):
         osm_editor = OpenStudioModelEditor(self.osm)
-
-        if self.ideal_loads_air_system:
-            osm_editor.use_ideal_loads_air_system()
-        else:
-            pass
-
         self.__simulator = Simulator(
             self.idd_filepath,
             osm_editor.forward_translate(),
@@ -690,13 +518,10 @@ class TrainData:
         self.__preprocess_idf()
        
     def __preprocess_idf(self):
-        # make output directory
-        os.makedirs(self.__simulator.output_directory,exist_ok=True)
-
         # idf object
         idf = self.__simulator.get_idf_object()
 
-        # change to hourly simulation
+        # update simulation time step
         idf.idfobjects['Timestep'] = []
         obj = idf.newidfobject('Timestep')
         obj.Number_of_Timesteps_per_Hour = self.timesteps_per_hour
@@ -721,35 +546,6 @@ class TrainData:
                 obj.File_Name = schedules_filepath
             else:
                 continue
-        
-        # set ideal loads to satisfy solely sensible load
-        if self.ideal_loads_air_system:
-            for obj in idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem']:
-                obj.Dehumidification_Control_Type = 'None'
-        else:
-            pass
-
-        # set setpoints filepath
-        if self.setpoints is not None:
-            setpoints_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_setpoint.csv')
-            pd.DataFrame(self.setpoints).to_csv(setpoints_filepath,index=False)
-            
-            # put schedule obj
-            obj = idf.newidfobject('Schedule:File')
-            schedule_object_name = f'ecobee setpoint'
-            obj.Name = schedule_object_name
-            obj.Schedule_Type_Limits_Name = 'Temperature'
-            obj.File_Name = setpoints_filepath
-            obj.Column_Number = 1
-            obj.Rows_to_Skip_at_Top = 1
-            obj.Number_of_Hours_of_Data = 8760
-            obj.Minutes_per_Item = 60
-
-            for obj in idf.idfobjects['ThermostatSetpoint:DualSetpoint']:
-                obj.Cooling_Setpoint_Temperature_Schedule_Name = f'ecobee setpoint'
-                obj.Heating_Setpoint_Temperature_Schedule_Name = f'ecobee setpoint'
-        else:
-            pass
 
         self.__simulator.idf = idf.idfstr()
     
