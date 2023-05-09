@@ -151,8 +151,9 @@ class DOEXStock:
         mechanical_loads_reference = 0
         ltd.update_kwargs('simulation_id',f'{ltd.kwargs["simulation_id"]}-{mechanical_loads_reference}-mechanical')
         ltd.update_kwargs('output_directory',f'{ltd.kwargs["output_directory"]}-{mechanical_loads_reference}-mechanical')
-        mechanical_temperature_data = pd.DataFrame(ltd.get_ideal_loads_data()['temperature'])
-        mechanical_loads_data = pd.DataFrame(ltd.get_ideal_loads_data()['load'])
+        ideal_loads_data = ltd.get_ideal_loads_data()
+        mechanical_temperature_data = pd.DataFrame(ideal_loads_data['temperature'])
+        mechanical_loads_data = pd.DataFrame(ideal_loads_data['load'])
         mechanical_loads_data = mechanical_loads_data.groupby(['timestep', 'zone_name'])[['cooling', 'heating']].sum().reset_index()
         mechanical_loads_data = mechanical_loads_data.merge(mechanical_temperature_data, on='timestep', how='left')
         mechanical_loads_data['metadata_id'] = metadata_id
