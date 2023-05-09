@@ -119,20 +119,33 @@ class TrainData:
     @output_variables.setter
     def output_variables(self,output_variables):
         default_output_variables = [
-            'Site Direct Solar Radiation Rate per Area', 'Site Diffuse Solar Radiation Rate per Area',
-            'Site Outdoor Air Drybulb Temperature', 'Site Outdoor Air Relative Humidity', 'Zone People Occupant Count',
-            'Zone Air Temperature','Zone Thermostat Cooling Setpoint Temperature','Zone Thermostat Heating Setpoint Temperature',
+            'Electric Equipment Electricity Energy',
+            'Exterior Lights Electricity Energy',
+            'Lights Electricity Energy',
+            'Other Equipment Convective Heating Energy',
+            'Other Equipment Convective Heating Rate',
+            'Site Diffuse Solar Radiation Rate per Area', 
+            'Site Direct Solar Radiation Rate per Area',
+            'Site Outdoor Air Drybulb Temperature',
+            'Site Outdoor Air Relative Humidity',
+            'Water Heater Use Side Heat Transfer Energy', 
             'Zone Air Relative Humidity',
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate','Other Equipment Convective Heating Rate',
-            'Zone Ideal Loads Zone Sensible Cooling Rate','Zone Ideal Loads Zone Sensible Heating Rate',
-            'Zone Air System Sensible Cooling Rate','Zone Air System Sensible Heating Rate',
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Energy','Other Equipment Convective Heating Energy',
-            'Zone Ideal Loads Zone Sensible Cooling Energy','Zone Ideal Loads Zone Sensible Heating Energy',
-            'Zone Air System Sensible Cooling Energy','Zone Air System Sensible Heating Energy',
-            'Water Heater Use Side Heat Transfer Energy',
-            'Exterior Lights Electricity Energy','Lights Electricity Energy','Electric Equipment Electricity Energy',
+            'Zone Air System Sensible Cooling Energy',
+            'Zone Air System Sensible Heating Energy',
+            'Zone Air System Sensible Cooling Rate',
+            'Zone Air System Sensible Heating Rate',
+            'Zone Air Temperature',
+            'Zone Ideal Loads Zone Sensible Cooling Energy',
+            'Zone Ideal Loads Zone Sensible Heating Energy',
+            'Zone Ideal Loads Zone Sensible Cooling Rate',
+            'Zone Ideal Loads Zone Sensible Heating Rate',
+            'Zone People Occupant Count',
+            'Zone Predicted Sensible Load to Setpoint Heat Transfer Energy',
+            'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate',
+            'Zone Thermostat Cooling Setpoint Temperature',
+            'Zone Thermostat Heating Setpoint Temperature',
         ]
-        self.__output_variables =default_output_variables if output_variables is None else output_variables
+        self.__output_variables = default_output_variables if output_variables is None else output_variables
 
     @timesteps_per_hour.setter
     def timesteps_per_hour(self,timesteps_per_hour):
@@ -156,13 +169,19 @@ class TrainData:
     def simulate_partial_loads(self,**kwargs):
         LOGGER.info('Started simulation.')
         ideal_loads_reference = kwargs.get('ideal_loads_reference',1)
-        initial_simulation_id = self.kwargs["simulation_id"]
-        initial_output_directory = self.kwargs["output_directory"]
-        self.__kwargs['simulation_id'] = f'{self.kwargs["simulation_id"]}-{ideal_loads_reference}-ideal'
-        self.__kwargs['output_directory'] = f'{self.kwargs["output_directory"]}-{ideal_loads_reference}-ideal'
-        self.__set_ideal_loads(**kwargs)
-        self.__kwargs['simulation_id'] = initial_simulation_id
-        self.__kwargs['output_directory'] = initial_output_directory
+
+        if self.ideal_loads_air_system:
+            initial_simulation_id = self.kwargs["simulation_id"]
+            initial_output_directory = self.kwargs["output_directory"]
+            self.__kwargs['simulation_id'] = f'{self.kwargs["simulation_id"]}-{ideal_loads_reference}-ideal'
+            self.__kwargs['output_directory'] = f'{self.kwargs["output_directory"]}-{ideal_loads_reference}-ideal'
+            self.__set_ideal_loads(**kwargs)
+            self.__kwargs['simulation_id'] = initial_simulation_id
+            self.__kwargs['output_directory'] = initial_output_directory
+        
+        else:
+            pass
+
         self.__transform_idf()
         seeds = [None] + [i for i in range(self.iterations + 1)]
         simulators = [self.__get_partial_load_simulator(i + ideal_loads_reference + 1,seed=s) for i, s in enumerate(seeds)]
@@ -364,38 +383,42 @@ class TrainData:
         return Simulator(self.idd_filepath,idf,self.epw,simulation_id=simulation_id,output_directory=output_directory)
     
     def __transform_idf(self):
+        control_objects = [
+            'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort', 'ThermostatSetpoint:DualSetpoint',
+            'ZoneControl:Thermostat:OperativeTemperature','ZoneControl:Thermostat:TemperatureAndHumidity','ZoneControl:Thermostat:StagedDualSetpoint'
+        ]
+        hvac_equipment_objects = [n.upper() for n in [
+            'AirTerminal:SingleDuct:Uncontrolled','Fan:ZoneExhaust','ZoneHVAC:Baseboard:Convective:Electric','ZoneHVAC:Baseboard:Convective:Water','ZoneHVAC:Baseboard:RadiantConvective:Electric','ZoneHVAC:Baseboard:RadiantConvective:Water',
+            'ZoneHVAC:Baseboard:RadiantConvective:Steam','ZoneHVAC:Dehumidifier:DX','ZoneHVAC:EnergyRecoveryVentilator','ZoneHVAC:FourPipeFanCoil',
+            'ZoneHVAC:HighTemperatureRadiant','ZoneHVAC:LowTemperatureRadiant:ConstantFlow','ZoneHVAC:LowTemperatureRadiant:Electric',
+            'ZoneHVAC:LowTemperatureRadiant:VariableFlow','ZoneHVAC:OutdoorAirUnit','ZoneHVAC:PackagedTerminalAirConditioner',
+            'ZoneHVAC:PackagedTerminalHeatPump','ZoneHVAC:RefrigerationChillerSet','ZoneHVAC:UnitHeater','ZoneHVAC:UnitVentilator',
+            'ZoneHVAC:WindowAirConditioner','ZoneHVAC:WaterToAirHeatPump','ZoneHVAC:VentilatedSlab',
+            'AirTerminal:DualDuct:ConstantVolume','AirTerminal:DualDuct:VAV','AirTerminal:DualDuct:VAV:OutdoorAir',
+            'AirTerminal:SingleDuct:ConstantVolume:Reheat','AirTerminal:SingleDuct:VAV:Reheat','AirTerminal:SingleDuct:VAV:NoReheat',
+            'AirTerminal:SingleDuct:SeriesPIU:Reheat','AirTerminal:SingleDuct:ParallelPIU:Reheat'
+            'AirTerminal:SingleDuct:ConstantVolume:FourPipeInduction','AirTerminal:SingleDuct:VAV:Reheat:VariableSpeedFan',
+            'AirTerminal:SingleDuct:VAV:HeatAndCool:Reheat','AirTerminal:SingleDuct:VAV:HeatAndCool:NoReheat',
+            'AirLoopHVAC:UnitarySystem','ZoneHVAC:IdealLoadsAirSystem','HVACTemplate:Zone:IdealLoadsAirSystem',
+            'Fan:OnOff', 'Coil:Cooling:DX:SingleSpeed', 'Coil:Heating:Electric', 'Coil:Heating:DX:SingleSpeed',
+            'AirLoopHVAC:UnitarySystem', 'AirTerminal:SingleDuct:ConstantVolume:NoReheat'
+        ]]
+
         # generate idf for simulations with partial loads
         idf = self.__simulator.get_idf_object()
 
         # remove Ideal Air Loads System if any
         if self.ideal_loads_air_system:
             idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem'] = []
-            obj_names = [
-                'ZoneControl:Thermostat','ZoneControl:Humidistat','ZoneControl:Thermostat:ThermalComfort', 'ThermostatSetpoint:DualSetpoint',
-                'ZoneControl:Thermostat:OperativeTemperature','ZoneControl:Thermostat:TemperatureAndHumidity','ZoneControl:Thermostat:StagedDualSetpoint'
-            ]
 
-            for name in obj_names:
+            for name in control_objects:
                 idf.idfobjects[name] = []
+
         else:
             # set hvac equipment availability to always off
-            obj_names = [n.upper() for n in [
-                'AirTerminal:SingleDuct:Uncontrolled','Fan:ZoneExhaust','ZoneHVAC:Baseboard:Convective:Electric','ZoneHVAC:Baseboard:Convective:Water','ZoneHVAC:Baseboard:RadiantConvective:Electric','ZoneHVAC:Baseboard:RadiantConvective:Water',
-                'ZoneHVAC:Baseboard:RadiantConvective:Steam','ZoneHVAC:Dehumidifier:DX','ZoneHVAC:EnergyRecoveryVentilator','ZoneHVAC:FourPipeFanCoil',
-                'ZoneHVAC:HighTemperatureRadiant','ZoneHVAC:LowTemperatureRadiant:ConstantFlow','ZoneHVAC:LowTemperatureRadiant:Electric',
-                'ZoneHVAC:LowTemperatureRadiant:VariableFlow','ZoneHVAC:OutdoorAirUnit','ZoneHVAC:PackagedTerminalAirConditioner',
-                'ZoneHVAC:PackagedTerminalHeatPump','ZoneHVAC:RefrigerationChillerSet','ZoneHVAC:UnitHeater','ZoneHVAC:UnitVentilator',
-                'ZoneHVAC:WindowAirConditioner','ZoneHVAC:WaterToAirHeatPump','ZoneHVAC:VentilatedSlab',
-                'AirTerminal:DualDuct:ConstantVolume','AirTerminal:DualDuct:VAV','AirTerminal:DualDuct:VAV:OutdoorAir',
-                'AirTerminal:SingleDuct:ConstantVolume:Reheat','AirTerminal:SingleDuct:VAV:Reheat','AirTerminal:SingleDuct:VAV:NoReheat',
-                'AirTerminal:SingleDuct:SeriesPIU:Reheat','AirTerminal:SingleDuct:ParallelPIU:Reheat'
-                'AirTerminal:SingleDuct:ConstantVolume:FourPipeInduction','AirTerminal:SingleDuct:VAV:Reheat:VariableSpeedFan',
-                'AirTerminal:SingleDuct:VAV:HeatAndCool:Reheat','AirTerminal:SingleDuct:VAV:HeatAndCool:NoReheat',
-                'AirLoopHVAC:UnitarySystem','ZoneHVAC:IdealLoadsAirSystem','HVACTemplate:Zone:IdealLoadsAirSystem'
-            ]]
             schedule_name = 'Always Off Discrete'
 
-            for name in obj_names:
+            for name in hvac_equipment_objects:
                 if name in idf.idfobjects.keys():
                     for obj in idf.idfobjects[name]:
                         try:
