@@ -496,18 +496,18 @@ class TrainData:
         cooled_zones, heated_zones = self.__get_conditioned_zones()
         cooled_zone_names = [f'\'{z}\'' for z in cooled_zones]
         heated_zone_names = [f'\'{z}\'' for z in heated_zones]
-        cooling_column = lambda x: f'{x}.value' if self.ideal_loads_air_system else f'CASE WHEN {x}.Value > 0 THEN 0 ELSE r.Value END'
-        heating_column = lambda x: f'{x}.value' if self.ideal_loads_air_system else f'CASE WHEN {x}.Value < 0 THEN 0 ELSE r.Value END'
-        cooling_variable = 'Zone Ideal Loads Zone Sensible Cooling Rate' if self.ideal_loads_air_system else 'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate'
-        heating_variable = 'Zone Ideal Loads Zone Sensible Heating Rate' if self.ideal_loads_air_system else cooling_variable
+        cooling_variable = 'Zone Ideal Loads Zone Sensible Cooling Rate' if self.ideal_loads_air_system else 'Zone Air System Sensible Cooling Rate'
+        heating_variable = 'Zone Ideal Loads Zone Sensible Heating Rate' if self.ideal_loads_air_system else 'Zone Air System Sensible Heating Rate'
+        column = lambda x: f'{x}.value' if self.ideal_loads_air_system else f'CASE WHEN {x}.Value < 0 THEN 0 ELSE r.Value END'
         zone_join_query = lambda x: f"REPLACE({x}.KeyValue, ' IDEAL LOADS AIR SYSTEM', '')" if self.ideal_loads_air_system else f'{x}.KeyValue'
+
         query = f"""
         SELECT
             r.TimeIndex AS timestep,
             'cooling' AS load,
             z.ZoneIndex AS zone_index,
             z.ZoneName AS zone_name,
-            ABS({cooling_column('r')}) AS value
+            {column('r')} AS value
         FROM ReportData r
         INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
         LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
@@ -518,7 +518,7 @@ class TrainData:
             'heating' AS load,
             z.ZoneIndex AS zone_index,
             z.ZoneName AS zone_name,
-            ABS({heating_column('r')}) AS value
+            {column('r')} AS value
         FROM ReportData r
         INNER JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
         LEFT JOIN Zones z ON z.ZoneName = {zone_join_query('d')}
@@ -732,7 +732,8 @@ class TrainData:
         # set setpoints filepath
         if self.setpoints is not None:
             setpoints_filepath = os.path.join(self.__simulator.output_directory,f'{self.__simulator.simulation_id}_setpoint.csv')
-            pd.DataFrame(self.setpoints).to_csv(setpoints_filepath,index=False)
+            setpoints = pd.DataFrame(self.setpoints)
+            setpoints.to_csv(setpoints_filepath,index=False)
             
             # put schedule obj
             obj = idf.newidfobject('Schedule:File')
@@ -742,7 +743,7 @@ class TrainData:
             obj.File_Name = setpoints_filepath
             obj.Column_Number = 1
             obj.Rows_to_Skip_at_Top = 1
-            obj.Number_of_Hours_of_Data = 8760
+            obj.Number_of_Hours_of_Data = setpoints.shape[0]
             obj.Minutes_per_Item = 60
 
             for obj in idf.idfobjects['ThermostatSetpoint:DualSetpoint']:
