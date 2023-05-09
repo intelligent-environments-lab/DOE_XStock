@@ -175,22 +175,27 @@ class DOEXStock:
         ltd.ideal_loads_air_system = True
         ideal_loads_reference = 1
         ideal_loads_data_temp, partial_loads_data = ltd.simulate_partial_loads(ideal_loads_reference=ideal_loads_reference)
-        ideal_loads_data = pd.DataFrame(ideal_loads_data_temp['load'])
-        ideal_loads_data = ideal_loads_data.groupby(['timestep'])[['cooling','heating']].sum().reset_index()
-        ideal_loads_data['average_indoor_air_temperature'] = ideal_loads_data_temp['temperature']['temperature']
-        ideal_loads_data['metadata_id'] = metadata_id
-        queries.append(f"""
-        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
-        VALUES (:metadata_id, {ideal_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
-        ;""")
-        values.append(ideal_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
-        queries.append(f"""
-        INSERT INTO energyplus_ideal_system_simulation (simulation_id, timestep, average_indoor_air_temperature, cooling_load, heating_load)
-        VALUES (
-            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {ideal_loads_reference}),
-            :timestep, :average_indoor_air_temperature, :cooling, :heating
-        );""")
-        values.append(ideal_loads_data.to_dict('records'))
+
+        if ltd.ideal_loads_air_system:
+            ideal_loads_data = pd.DataFrame(ideal_loads_data_temp['load'])
+            ideal_loads_data = ideal_loads_data.groupby(['timestep'])[['cooling','heating']].sum().reset_index()
+            ideal_loads_data['average_indoor_air_temperature'] = ideal_loads_data_temp['temperature']['temperature']
+            ideal_loads_data['metadata_id'] = metadata_id
+            queries.append(f"""
+            INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
+            VALUES (:metadata_id, {ideal_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
+            ;""")
+            values.append(ideal_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
+            queries.append(f"""
+            INSERT INTO energyplus_ideal_system_simulation (simulation_id, timestep, average_indoor_air_temperature, cooling_load, heating_load)
+            VALUES (
+                (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {ideal_loads_reference}),
+                :timestep, :average_indoor_air_temperature, :cooling, :heating
+            );""")
+            values.append(ideal_loads_data.to_dict('records'))
+        
+        else:
+            pass
 
         for simulation_id, data in partial_loads_data.items():
             data = pd.DataFrame(data)
