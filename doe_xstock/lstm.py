@@ -8,7 +8,7 @@ from eppy.bunch_subclass import BadEPFieldError
 import numpy as np
 import pandas as pd
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
-from doe_xstock.utilities import read_json
+from doe_xstock.utilities import read_json, write_data
 
 logging_config = read_json(os.path.join(os.path.dirname(__file__),Path('misc/logging_config.json')))
 logging.config.dictConfig(logging_config)
@@ -29,6 +29,7 @@ class TrainData:
         self.__kwargs = kwargs
         self.__simulator = None
         self.__partial_loads_data = None
+        self.__errors = []
 
     @property
     def idd_filepath(self):
@@ -65,6 +66,10 @@ class TrainData:
     @property
     def max_workers(self):
         return self.__max_workers
+    
+    @property
+    def errors(self):
+        return self.__errors
 
     @property
     def seed(self):
@@ -457,9 +462,24 @@ class TrainData:
 
     def __set_simulator(self):
         osm_editor = OpenStudioModelEditor(self.osm)
+        idf = osm_editor.forward_translate()
+
+        try:
+            assert\
+                'OS:AirLoopHVAC:UnitarySystem' in self.osm\
+                    and 'ZoneControl:Thermostat,' in idf\
+                        and 'ThermostatSetpoint:DualSetpoint,' in idf
+        except:
+            self.__errors.append(1)
+            raise EnergyPlusSimulationError
+
+        # write_data(self.osm, 'test.osm')
+        # write_data(osm_editor.forward_translate(), 'test.idf')
+        # assert False
+
         self.__simulator = Simulator(
             self.idd_filepath,
-            osm_editor.forward_translate(),
+            idf,
             self.epw,
             simulation_id=self.__kwargs.get('simulation_id',None),
             output_directory=self.__kwargs.get('output_directory',None)
@@ -571,5 +591,37 @@ class TrainData:
                 ON UPDATE CASCADE
         );
         CREATE INDEX IF NOT EXISTS lstm_train_data_simulation_id ON lstm_train_data(simulation_id);
+        CREATE TABLE IF NOT EXISTS energyplus_simulation_error_description (
+            id INTEGER NOT NULL,
+            description TEXT NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE (description)
+        );
+        INSERT OR IGNORE INTO energyplus_simulation_error_description (id, description)
+        VALUES 
+            (1, 'forward translate error: air loop not found in osm and thermostat not found in idf')
+        ;
+        CREATE TABLE IF NOT EXISTS energyplus_simulation_error (
+            id INTEGER NOT NULL,
+            metadata_id INTEGER NOT NULL,
+            description_id INTEGER NOT NULL,
+            PRIMARY KEY (id),
+            FOREIGN KEY (metadata_id) REFERENCES metadata (id)
+                ON DELETE CASCADE
+                ON UPDATE CASCADE,
+            FOREIGN KEY (description_id) REFERENCES energyplus_simulation_error_description (id)
+                ON DELETE NO ACTION
+                ON UPDATE CASCADE,
+            UNIQUE (metadata_id, description_id)
+        );
         """)
+
+class Error(Exception):
+    """Base class for other exceptions."""
+
+class EnergyPlusSimulationError(Error):
+    __MESSAGE = 'Simulation errors were found.'
+  
+    def __init__(self,message=None):
+        super().__init__(self.__MESSAGE if message is None else message)
     

@@ -18,7 +18,7 @@ import urllib.parse
 from doe_xstock.data import MeteostatWeather
 from doe_xstock.database import SQLiteDatabase
 from doe_xstock.exploration import MetadataClustering
-from doe_xstock.lstm import TrainData
+from doe_xstock.lstm import TrainData, EnergyPlusSimulationError
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
 from doe_xstock.utilities import read_json, write_data
 
@@ -148,10 +148,24 @@ class DOEXStock:
         database.query(f"""
         PRAGMA foreign_keys = ON;
         DELETE FROM energyplus_simulation WHERE metadata_id = {metadata_id};
+        DELETE FROM energyplus_simulation_error WHERE metadata_id = {metadata_id};
         """)
         
         # run ideal air loads system and other equipment simulations
-        partial_loads_data = ltd.simulate_partial_loads()
+        try:
+            partial_loads_data = ltd.simulate_partial_loads()
+        
+        except EnergyPlusSimulationError:
+            errors = pd.DataFrame(ltd.errors, columns=['description_id'])
+            errors['metadata_id'] = metadata_id
+            database.insert(
+                'energyplus_simulation_error',
+                errors.columns.tolist(),
+                errors.values,
+            )
+            LOGGER.debug(f'Simulation for bldg_id={bldg_id} terminated with errors: {ltd.errors}.')
+            return False
+        
         for simulation_id, data in partial_loads_data.items():
             data = pd.DataFrame(data)
             data['metadata_id'] = metadata_id
@@ -175,6 +189,8 @@ class DOEXStock:
         );""")
         values.append(partial_loads_data.to_dict('records'))
         database.insert_batch(queries, values)
+
+        return True
 
     @staticmethod    
     def simulate(**kwargs):
