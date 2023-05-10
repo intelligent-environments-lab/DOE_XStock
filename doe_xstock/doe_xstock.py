@@ -63,6 +63,45 @@ class DOEXStock:
         LOGGER.info(f'Ended metadata cluster.')
 
     @staticmethod
+    def write_lstm_train_data(**kwargs):
+        database = DOEXStockDatabase(kwargs.pop('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH))
+        dataset_type = kwargs['dataset_type']
+        weather_data = kwargs['weather_data']
+        year_of_publication = kwargs['year_of_publication']
+        release = kwargs['release']
+        bldg_id = kwargs['bldg_id']
+        metadata_id = database.query_table(f"""
+        SELECT 
+            i.metadata_id
+        FROM energyplus_simulation i
+        WHERE metadata_id = (
+            SELECT 
+                metadata_id 
+            FROM energyplus_simulation_input i
+            WHERE
+                i.dataset_type = '{dataset_type}'
+                AND i.dataset_weather_data = '{weather_data}'
+                AND i.dataset_year_of_publication = {year_of_publication}
+                AND i.dataset_release = {release}
+                AND i.bldg_id = {bldg_id}
+        )
+        LIMIT 1 
+        """)['metadata_id']
+
+        if len(metadata_id > 0):
+            metadata_id = metadata_id.iloc[0]
+            output_directory = kwargs['lstm_train_data_directory']
+            filename = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}.csv'
+            os.makedirs(output_directory, exist_ok=True)
+            filepath = os.path.join(output_directory, filename)
+            
+            TrainData.get_train_data(database, metadata_id).to_csv(filepath, index=False)
+            LOGGER.debug(f'Wrote LSTM data for bldg_id: {bldg_id}.')
+
+        else:
+            LOGGER.debug(f'Did not find training data to write for bldg_id: {bldg_id}.')
+
+    @staticmethod
     def set_lstm_train_data(**kwargs):
         # initializa database
         database = DOEXStockDatabase(kwargs.pop('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH))
