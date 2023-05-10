@@ -545,7 +545,7 @@ class TrainData:
         FROM lstm_train_data l
         LEFT JOIN energyplus_simulation s ON
             s.id = l.simulation_id
-        LEFT JOIN ecobee_building b ON b.id = e.building_id
+        LEFT JOIN ecobee_building b ON b.id = s.ecobee_building_id
         LEFT JOIN metadata m ON m.id = s.metadata_id
         WHERE l.simulation_id IN (
             SELECT id FROM energyplus_simulation WHERE metadata_id = {metadata_id}
