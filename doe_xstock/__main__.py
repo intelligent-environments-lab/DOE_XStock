@@ -64,11 +64,6 @@ def main():
     subparser_set_lstm_train_data.add_argument('-m','--simulation_id',type=str,dest='simulation_id',help='Unique simulation ID.')
     subparser_set_lstm_train_data.set_defaults(func=DOEXStock.set_lstm_train_data)
 
-    # dataset -> write_lstm_train_data
-    subparser_write_lstm_train_data = dataset_subparsers.add_parser('write_lstm_train_data',description='Write train data for building LSTM model to .csv file.')
-    subparser_write_lstm_train_data.add_argument('bldg_id',type=int,help='bldg_id field value in metadata table.')
-    subparser_write_lstm_train_data.set_defaults(func=DOEXStock.write_lstm_train_data)
-
     args = parser.parse_args()
     arg_spec = inspect.getfullargspec(args.func)
     kwargs = {

@@ -5,7 +5,6 @@ import io
 import logging
 import logging.config
 import os
-import shutil
 import uuid
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -14,11 +13,10 @@ import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import urllib3
-import urllib.parse
 from doe_xstock.data import MeteostatWeather
 from doe_xstock.database import SQLiteDatabase
 from doe_xstock.exploration import MetadataClustering
-from doe_xstock.lstm import TrainData, EnergyPlusSimulationError
+from doe_xstock.lstm import TrainData
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
 from doe_xstock.utilities import read_json, write_data
 
@@ -63,45 +61,6 @@ class DOEXStock:
         LOGGER.info(f'Ended metadata cluster.')
 
     @staticmethod
-    def write_lstm_train_data(**kwargs):
-        database = DOEXStockDatabase(kwargs.pop('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH))
-        dataset_type = kwargs['dataset_type']
-        weather_data = kwargs['weather_data']
-        year_of_publication = kwargs['year_of_publication']
-        release = kwargs['release']
-        bldg_id = kwargs['bldg_id']
-        metadata_id = database.query_table(f"""
-        SELECT 
-            i.metadata_id
-        FROM energyplus_simulation i
-        WHERE metadata_id = (
-            SELECT 
-                metadata_id 
-            FROM energyplus_simulation_input i
-            WHERE
-                i.dataset_type = '{dataset_type}'
-                AND i.dataset_weather_data = '{weather_data}'
-                AND i.dataset_year_of_publication = {year_of_publication}
-                AND i.dataset_release = {release}
-                AND i.bldg_id = {bldg_id}
-        )
-        LIMIT 1 
-        """)['metadata_id']
-
-        if len(metadata_id > 0):
-            metadata_id = metadata_id.iloc[0]
-            output_directory = kwargs['lstm_train_data_directory']
-            filename = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}.csv'
-            os.makedirs(output_directory, exist_ok=True)
-            filepath = os.path.join(output_directory, filename)
-            
-            TrainData.get_train_data(database, metadata_id).to_csv(filepath, index=False)
-            LOGGER.debug(f'Wrote LSTM data for bldg_id: {bldg_id}.')
-
-        else:
-            LOGGER.debug(f'Did not find training data to write for bldg_id: {bldg_id}.')
-
-    @staticmethod
     def set_lstm_train_data(**kwargs):
         # initializa database
         database = DOEXStockDatabase(kwargs.pop('filepath',DOEXStock.DEFAULT_DATABASE_FILEPATH))
@@ -109,6 +68,7 @@ class DOEXStock:
 
         # store simulation variables
         simulation_output_directory = kwargs.get('energyplus_output_directory','energyplus_output')
+        lstm_train_data_directory = kwargs.get('lstm_train_data_directory', 'lstm_train_data')
         idd_filepath = kwargs['idd_filepath']
         iterations = kwargs.get('iterations',4)
         max_workers = iterations + 1
@@ -161,12 +121,7 @@ class DOEXStock:
         # simulation ID is built from dataset reference and bldg_id
         simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'\
             if kwargs.get('simulation_id') is None else kwargs['simulation_id']
-        output_directory = os.path.join(simulation_output_directory, f'{simulation_id}')
-        
-        if os.path.isdir(output_directory):
-            shutil.rmtree(output_directory)
-        else:
-            pass
+        output_directory = os.path.join(simulation_output_directory,f'output_{simulation_id}')
         
         # initialize lstm train data class
         ltd = TrainData(
@@ -175,7 +130,9 @@ class DOEXStock:
             simulation_data['epw'],
             schedules,
             setpoints=setpoints,
-            seed=kwargs.get('seed', simulation_id),
+            ideal_loads_air_system=False,
+            edit_ems=True,
+            seed=kwargs.get('seed',simulation_id),
             iterations=iterations,
             max_workers=max_workers,
             simulation_id=simulation_id,
@@ -187,24 +144,50 @@ class DOEXStock:
         database.query(f"""
         PRAGMA foreign_keys = ON;
         DELETE FROM energyplus_simulation WHERE metadata_id = {metadata_id};
-        DELETE FROM energyplus_simulation_error WHERE metadata_id = {metadata_id};
         """)
         
+        # first simulation is to get the weighted average temperature for the as-is model (mechanical system loads)
+        mechanical_loads_reference = 0
+        ltd.update_kwargs('simulation_id',f'{ltd.kwargs["simulation_id"]}-{mechanical_loads_reference}-mechanical')
+        ltd.update_kwargs('output_directory',f'{ltd.kwargs["output_directory"]}-{mechanical_loads_reference}-mechanical')
+        mechanical_loads_data = pd.DataFrame(ltd.get_ideal_loads_data()['temperature'])
+        ltd.update_kwargs('simulation_id',simulation_id)
+        ltd.update_kwargs('output_directory',output_directory)
+        mechanical_loads_data['metadata_id'] = metadata_id
+        queries.append(f"""
+        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
+        VALUES (:metadata_id, {mechanical_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
+        ;""")
+        values.append(mechanical_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
+        queries.append(f"""
+        INSERT INTO energyplus_mechanical_system_simulation (simulation_id, timestep, average_indoor_air_temperature)
+        VALUES (
+            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {mechanical_loads_reference}),
+            :timestep, :value
+        );""")
+        values.append(mechanical_loads_data.to_dict('records'))
+        
         # run ideal air loads system and other equipment simulations
-        try:
-            partial_loads_data = ltd.simulate_partial_loads()
-        
-        except EnergyPlusSimulationError:
-            errors = pd.DataFrame(ltd.errors, columns=['description_id'])
-            errors['metadata_id'] = metadata_id
-            database.insert(
-                'energyplus_simulation_error',
-                errors.columns.tolist(),
-                errors.values,
-            )
-            LOGGER.debug(f'Simulation for bldg_id={bldg_id} terminated with errors: {ltd.errors}.')
-            return False
-        
+        ltd.ideal_loads_air_system = True
+        ideal_loads_reference = 1
+        ideal_loads_data_temp, partial_loads_data = ltd.simulate_partial_loads(ideal_loads_reference=ideal_loads_reference)
+        ideal_loads_data = pd.DataFrame(ideal_loads_data_temp['load'])
+        ideal_loads_data = ideal_loads_data.groupby(['timestep'])[['cooling','heating']].sum().reset_index()
+        ideal_loads_data['average_indoor_air_temperature'] = ideal_loads_data_temp['temperature']['value']
+        ideal_loads_data['metadata_id'] = metadata_id
+        queries.append(f"""
+        INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
+        VALUES (:metadata_id, {ideal_loads_reference}, {ecobee_id if ecobee_id is not None else 'NULL'})
+        ;""")
+        values.append(ideal_loads_data.groupby(['metadata_id']).size().reset_index().to_dict('records'))
+        queries.append(f"""
+        INSERT INTO energyplus_ideal_system_simulation (simulation_id, timestep, average_indoor_air_temperature, cooling_load, heating_load)
+        VALUES (
+            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = {ideal_loads_reference}),
+            :timestep, :average_indoor_air_temperature, :cooling, :heating
+        );""")
+        values.append(ideal_loads_data.to_dict('records'))
+
         for simulation_id, data in partial_loads_data.items():
             data = pd.DataFrame(data)
             data['metadata_id'] = metadata_id
@@ -219,17 +202,52 @@ class DOEXStock:
         values.append(partial_loads_data.groupby(['metadata_id','reference']).size().reset_index().to_dict('records'))
         queries.append(f"""
         INSERT INTO lstm_train_data (
-            simulation_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation, diffuse_solar_radiation,
-            outdoor_air_temperature, average_indoor_air_temperature, occupant_count, cooling_load, heating_load, setpoint
+            simulation_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation,
+            outdoor_air_temperature, average_indoor_air_temperature, occupant_count, cooling_load, heating_load
         ) VALUES (
             (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = :reference),
-            :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation, :diffuse_solar_radiation,
-            :outdoor_air_temperature, :average_indoor_air_temperature, :occupant_count, :cooling_load, :heating_load, :setpoint
+            :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation,
+            :outdoor_air_temperature, :average_indoor_air_temperature, :occupant_count, :cooling_load, :heating_load
         );""")
         values.append(partial_loads_data.to_dict('records'))
         database.insert_batch(queries, values)
 
-        return True
+        # save lstm data
+        os.makedirs(lstm_train_data_directory, exist_ok=True)
+        database.query_table(f"""
+        SELECT
+            m.in_resstock_county_id AS location,
+            m.bldg_id AS resstock_building_id,
+            b.name AS ecobee_building_id,
+            s.reference AS simulation_reference,
+            l.timestep,
+            l.month,
+            l.day,
+            l.day_of_week,
+            l.hour,
+            l.minute,
+            l.direct_solar_radiation,
+            l.diffuse_solar_radiation,
+            l.outdoor_air_temperature,
+            e.setpoint,
+            l.average_indoor_air_temperature,
+            l.occupant_count,
+            l.cooling_load,
+            l.heating_load,
+            l.cooling_load/i.cooling_load AS ideal_cooling_load_proportion,
+            l.heating_load/i.heating_load AS ideal_heating_load_proportion
+        FROM lstm_train_data l
+        LEFT JOIN energyplus_simulation s ON
+            s.id = l.simulation_id
+        LEFT JOIN (SELECT * FROM energyplus_simulation WHERE reference = 1) h ON 
+            h.metadata_id = s.metadata_id
+        LEFT JOIN energyplus_ideal_system_simulation i ON 
+            i.simulation_id = h.id AND i.timestep = l.timestep
+        LEFT JOIN ecobee_timeseries e ON e.timestep = l.timestep AND e.building_id = s.ecobee_building_id
+        LEFT JOIN ecobee_building b ON b.id = e.building_id
+        LEFT JOIN metadata m ON m.id = s.metadata_id
+        WHERE s.metadata_id = {metadata_id}
+        """).to_csv(os.path.join(lstm_train_data_directory, f'{simulation_id}.csv'), index=False)
 
     @staticmethod    
     def simulate(**kwargs):
@@ -620,7 +638,7 @@ class DOEXStockDatabase(SQLiteDatabase):
     def __get_amy_table(self,dataset,in_nhgis_county_gisjoin,latitude,longitude):
         year = dataset['weather_data'][3:]
         url = self.__get_dataset_url(**dataset)
-        url = urllib.parse.join(url, f'weather/{dataset["weather_data"]}/{in_nhgis_county_gisjoin}_{year}.csv')
+        url = os.path.join(url,'weather',dataset['weather_data'],f'{in_nhgis_county_gisjoin}_{year}.csv')
         amy_table = pd.read_csv(url,parse_dates=['date_time'])
         amy_table['date_time'] = amy_table['date_time'] - timedelta(hours=1)
         amy_table['Year'] = amy_table['date_time'].dt.year
@@ -662,7 +680,7 @@ class DOEXStockDatabase(SQLiteDatabase):
         for i, (bldg_id, metadata_id, county, upgrade) in enumerate(buildings):
             LOGGER.debug(f'Downloading timeseries ({i+1}/{buildings.shape[0]}): bldg_id: {bldg_id}, upgrade: {upgrade}.')
             building_path = f'timeseries_individual_buildings/by_county/upgrade={upgrade}/county={county}/{bldg_id}-{upgrade}.parquet'
-            url = urllib.parse.join(dataset_url,building_path)
+            url = os.path.join(dataset_url,building_path)
             data = pd.read_parquet(url)
             data = data.reset_index(drop=False)
             data.columns = [c.replace('.','_').lower() for c in data.columns]
@@ -682,7 +700,7 @@ class DOEXStockDatabase(SQLiteDatabase):
         for i, (bldg_id,metadata_id,upgrade) in enumerate(buildings):
             LOGGER.debug(f'Downloading model ({i+1}/{buildings.shape[0]}): bldg_id: {bldg_id}, upgrade: {upgrade}.')
             building_path = f'building_energy_models/bldg{bldg_id:07d}-up{upgrade:02d}.osm.gz'
-            url = urllib.parse.join(dataset_url,building_path)
+            url = os.path.join(dataset_url,building_path)
             response = requests.get(url)
             compressed_file = io.BytesIO(response.content)
             decompressed_file = gzip.GzipFile(fileobj=compressed_file,mode='rb')
@@ -703,7 +721,7 @@ class DOEXStockDatabase(SQLiteDatabase):
         for i, (bldg_id,metadata_id,upgrade) in enumerate(buildings):
             LOGGER.debug(f'Downloading schedule ({i+1}/{buildings.shape[0]}): bldg_id: {bldg_id}, upgrade: {upgrade}.')
             building_path = f'occupancy_schedules/bldg{bldg_id:07d}-up{upgrade:02d}.csv.gz'
-            url = urllib.parse.join(dataset_url,building_path)
+            url = os.path.join(dataset_url,building_path)
             data = pd.read_csv(url)
             data['metadata_id'] = metadata_id
             data['timestep'] = data.index
@@ -744,14 +762,14 @@ class DOEXStockDatabase(SQLiteDatabase):
             },
         }[summary_type.name]
         dataset_url = cls.__get_dataset_url(dataset_type,weather_data,year_of_publication,release)
-        dataset_url = urllib.parse.join(dataset_url,downloader['url'])
+        dataset_url = os.path.join(dataset_url,downloader['url'])
         data = downloader['reader'](dataset_url,**downloader['reader_kwargs'])
         return data
 
     @classmethod
     def __get_dataset_url(cls,dataset_type,weather_data,year_of_publication,release):
         dataset_path = f'{year_of_publication}/{dataset_type}_{weather_data}_release_{release}/'
-        return urllib.parse.join(DOEXStockDatabase.__ROOT_URL,dataset_path)
+        return os.path.join(DOEXStockDatabase.__ROOT_URL,dataset_path)
 
     @classmethod
     def download_energyplus_weather_metadata(cls):
