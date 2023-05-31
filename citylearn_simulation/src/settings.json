@@ -1,0 +1,68 @@
+{
+    "central_agent": false,
+    "episodes": 15,
+    "start_timestamp": "2018-01-01 00:00:00",
+    "end_timestamp": "2018-12-31 23:00:00",
+    "season_timestamps": {
+        "winter": {
+            "train_start_timestamp": "2018-01-01 00:00:00",
+            "train_end_timestamp": "2018-02-28 23:00:00",
+            "test_start_timestamp": "2018-03-01 00:00:00",
+            "test_end_timestamp": "2018-03-31 23:00:00"
+        },
+        "summer": {
+            "train_start_timestamp": "2018-06-01 00:00:00",
+            "train_end_timestamp": "2018-07-31 23:00:00",
+            "test_start_timestamp": "2018-08-01 00:00:00",
+            "test_end_timestamp": "2018-08-31 23:00:00"
+        }
+    },
+    "active_observations": [
+        "day_type",
+        "hour",
+        "outdoor_dry_bulb_temperature",
+        "outdoor_dry_bulb_temperature_predicted_6h",
+        "outdoor_dry_bulb_temperature_predicted_12h",
+        "direct_solar_irradiance",
+        "direct_solar_irradiance_predicted_6h",
+        "direct_solar_irradiance_predicted_12h",
+        "non_shiftable_load",
+        "solar_generation",
+        "dhw_storage_soc",
+        "electrical_storage_soc",
+        "net_electricity_consumption"
+    ],
+    "active_actions": [
+        "dhw_storage",
+        "electrical_storage"
+    ],
+    "sam_module_size": 5.263,
+    "battery_nominal_power": 2.5,
+    "pv_size_limit_proportion": 0.70,
+    "default_pv_size": 10.0,
+    "default_battery_capacity": 13.5,
+    "agent": {
+        "type": "citylearn.agents.sac.SACOptimizedRBC",
+        "attributes": {
+            "hidden_dimension": [128, 128],
+            "discount": 0.99,
+            "tau": 0.005,
+            "lr": 0.0003,
+            "batch_size": 256,
+            "replay_buffer_capacity": 100000.0,
+            "start_training_time_step": 1440,
+            "end_exploration_time_step": 1441,
+            "deterministic_start_time_step": 20174,
+            "action_scaling_coef": 0.5,
+            "reward_scaling": 5.0,
+            "update_per_time_step": 2,
+            "alpha": 0.2,
+            "action_scaling_coefficient": 1.0,
+            "seed": 0
+        }
+    },
+    "reward_function": {
+        "type": "citylearn.reward_function.AdditiveSolarPenaltyReward",
+        "attributes": null
+    }
+}
