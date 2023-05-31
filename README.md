@@ -22,7 +22,7 @@ The workflow assumes a Linux or Mac based machine is in use.
 ## Reproduction Workflow
 
 ### Neighborhoods
-To reproduce the neighborhoods used in the `A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn` Building and Simulation 2023 conference paper, first download the relevant building data for the three neighborhoods (CA, Alameda County; TX, Travis County; and VT, Chittendem County)from the [End-Use Load Profiles (EULP) for the U.S. Building Stock database](https://www.nrel.gov/buildings/end-use-load-profiles.html):
+To reproduce the neighborhoods used in the `A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn` Building and Simulation 2023 conference paper, first download the relevant building data for the three neighborhoods (CA, Alameda County; TX, Travis County; and VT, Chittenden County)from the [End-Use Load Profiles (EULP) for the U.S. Building Stock database](https://www.nrel.gov/buildings/end-use-load-profiles.html):
 ```console
 sh workflow/download.sh
 ```
