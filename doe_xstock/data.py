@@ -1,8 +1,12 @@
 from datetime import datetime, timedelta
+import os
+import random
 import ssl
 from meteostat import Stations
 from meteostat import Daily, Hourly, Monthly, units
+import numpy as np
 import pandas as pd
+from doe_xstock.database import SQLiteDatabase
 
 class MeteostatWeather:
     def __init__(self, station_ids, weather_variables=None, resolution=None, earliest_start_timestamp=None, latest_end_timestamp=None, model=None, gap_limit=None):
@@ -157,3 +161,76 @@ class MeteostatWeather:
             pass
         else:
             ssl._create_default_https_context = _create_unverified_https_context
+
+class CityLearnData:
+    @staticmethod
+    def get_building_data(**kwargs):
+        database = CityLearnData.get_database(**kwargs)
+        filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_building_data.sql')
+        data = database.query_table_from_file(filepath)
+
+        return data
+    
+    @staticmethod
+    def get_weather_data(**kwargs):
+        database = CityLearnData.get_database(**kwargs)
+        filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_weather_data.sql')
+        data = database.query_table_from_file(filepath)
+
+        shifts = [6, 12, 24]
+        columns = data.columns
+
+        for c in columns:
+            if c == 'Outdoor Drybulb Temperature (C)':
+                accuracy = [0.3, 0.65, 1.35]
+            
+            else:
+                accuracy = [2.5, 5.0, 10.0]
+
+            for s, a in zip(shifts, accuracy):
+                arr = np.roll(data[c], shift=-s)
+                random.seed(int(arr.mean()))
+
+                if c in ['Outdoor Drybulb Temperature (C)']:
+                    data[f'{s}h {c}'] = arr + np.random.uniform(-a, a, len(arr))
+
+                elif c in ['Outdoor Relative Humidity (%)', 'Diffuse Solar Radiation (W/m2)', 'Direct Solar Radiation (W/m2)']:
+                    data[f'{s}h {c}'] = arr + arr*np.random.uniform(-a, a, len(arr))
+
+                else:
+                    raise Exception(f'Unknown field: {c}')
+                
+                if c != 'Outdoor Drybulb Temperature (C)':
+                    data[f'{s}h {c}'] = data[f'{s}h {c}'].clip(lower=0.0)
+
+                    if c == 'Outdoor Relative Humidity (%)':
+                        data[f'{s}h {c}'] = data[f'{s}h {c}'].clip(upper=100.0)
+                    
+                    else:
+                        pass
+
+                else:
+                    pass
+
+        return data
+    
+    @staticmethod
+    def get_database(**kwargs):
+        simulation_output_directory = kwargs.get('energyplus_output_directory','energyplus_output')
+        dataset_type = kwargs['dataset_type']
+        weather_data = kwargs['weather_data']
+        year_of_publication = kwargs['year_of_publication']
+        release = kwargs['release']
+        bldg_id = kwargs['bldg_id']
+        simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'\
+            if kwargs.get('simulation_id') is None else kwargs['simulation_id']
+        output_directory = os.path.join(simulation_output_directory, f'{simulation_id}')
+        simulation_reference_id = f'{simulation_id}-0-partial'
+        filepath = os.path.join(
+            output_directory,
+            simulation_reference_id, 
+            f'{simulation_reference_id}.sql'
+        )
+        assert os.path.isfile(filepath), f'database with filepath {filepath} does not exist.'
+        
+        return SQLiteDatabase(filepath)
