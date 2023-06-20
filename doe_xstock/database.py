@@ -51,6 +51,14 @@ class SQLiteDatabase:
             conn.close()
 
         return responses
+    
+    def query_table_from_file(self,filepath,replace=None):
+        with open(filepath, 'r') as f:
+            query = f.read()
+        
+        query = self.replace_query(query, replace)
+
+        return self.query_table(query)
 
     def query_table(self,query):
         try:
@@ -90,9 +98,11 @@ class SQLiteDatabase:
         finally:
             connection.close()
 
-    def execute_sql_from_file(self,filepath):
+    def execute_sql_from_file(self,filepath,replace=None):
         with open(filepath,'r') as f:
             queries = f.read()
+
+        queries = self.replace_query(queries, replace)
         
         try:
             connection = self.__get_connection()
@@ -103,6 +113,15 @@ class SQLiteDatabase:
         
         finally:
             connection.close()
+
+    def replace_query(self, query, replace):
+        if replace is not None:
+            for k, v in replace.items():
+                query = query.replace(k, v)
+        else:
+            pass
+
+        return query
 
     def insert_file(self,filepath,table_name,**kwargs):
         df = self.read_file(filepath)
