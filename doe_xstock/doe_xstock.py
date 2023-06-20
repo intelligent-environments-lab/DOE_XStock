@@ -42,7 +42,6 @@ class DOEXStock:
         database.insert_dataset(dataset, filters=filters)
         LOGGER.info(f'Ended insert.')
 
-
     @staticmethod
     def metadata_clustering(**kwargs):
         LOGGER.info(f'Started metadata cluster.')
@@ -296,7 +295,7 @@ class DOEXStockDatabase(SQLiteDatabase):
         self.__build(overwrite,apply_changes)
 
     def __build(self,overwrite,apply_changes):
-        schema_filepath = os.path.join(os.path.dirname(__file__),'misc/schema.sql')
+        schema_filepath = os.path.join(os.path.dirname(__file__),'misc/queries/set_schema.sql')
         
         if os.path.isfile(self.filepath):
             if overwrite:
