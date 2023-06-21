@@ -81,8 +81,16 @@ SELECT
     p."Indoor Relative Humidity (%)",
     p."Equipment Electric Power (kWh)",
     p."DHW Heating (kWh)",
-    COALESCE(p."Cooling Load (kWh)", 0.0) AS "Cooling Load (kWh)",
-    COALESCE(p."Heating Load (kWh)", 0.0) AS "Heating Load (kWh)",
+    CASE 
+        WHEN COALESCE(p."Cooling Load (kWh)", 0.0) >= COALESCE(p."Heating Load (kWh)", 0.0)
+            THEN COALESCE(p."Cooling Load (kWh)", 0.0) - COALESCE(p."Heating Load (kWh)", 0.0)
+                ELSE 0.0
+                    END AS "Cooling Load (kWh)",
+    CASE 
+        WHEN COALESCE(p."Heating Load (kWh)", 0.0) > COALESCE(p."Cooling Load (kWh)", 0.0)
+            THEN COALESCE(p."Heating Load (kWh)", 0.0) - COALESCE(p."Cooling Load (kWh)", 0.0)
+                ELSE 0.0
+                    END AS "Heating Load (kWh)",
     NULL AS "Solar Generation (W/kW)",
     p."Occupancy" AS "Occupant Count (people)",
     p."Temperature Set Point (C)",
