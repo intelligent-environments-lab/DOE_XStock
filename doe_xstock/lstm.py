@@ -15,12 +15,23 @@ logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_a')
 
 class TrainData:
-    def __init__(self,idd_filepath,osm,epw,schedules,setpoints,output_variables=None,timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs):
+    def __init__(
+            self,idd_filepath,osm,epw,schedules,setpoints,run_period_begin_month=None,
+            run_period_begin_day_of_month=None,run_period_begin_year=None,run_period_end_month=None,
+            run_period_end_day_of_month=None,run_period_end_year=None,output_variables=None,
+            timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs
+        ):
         self.idd_filepath = idd_filepath
         self.osm = osm
         self.epw = epw
         self.schedules = schedules
         self.setpoints = setpoints
+        self.run_period_begin_month = run_period_begin_month
+        self.run_period_begin_day_of_month = run_period_begin_day_of_month
+        self.run_period_begin_year = run_period_begin_year
+        self.run_period_end_month = run_period_end_month
+        self.run_period_end_day_of_month = run_period_end_day_of_month
+        self.run_period_end_year = run_period_end_year
         self.output_variables = output_variables
         self.timesteps_per_hour = timesteps_per_hour
         self.iterations = iterations
@@ -297,10 +308,6 @@ class TrainData:
             self.__errors.append(1)
             raise EnergyPlusSimulationError
 
-        # write_data(self.osm, 'test.osm')
-        # write_data(osm_editor.forward_translate(), 'test.idf')
-        # assert False
-
         self.__simulator = Simulator(
             self.idd_filepath,
             idf,
@@ -313,6 +320,15 @@ class TrainData:
     def __preprocess_idf(self):
         # idf object
         idf = self.__simulator.get_idf_object()
+
+        # update run period
+        obj = idf.idfobjects['RunPeriod'][0]
+        obj.Begin_Month = obj.Begin_Month if self.run_period_begin_month is None else self.run_period_begin_month
+        obj.Begin_Day_of_Month = obj.Begin_Day_of_Month if self.run_period_begin_day_of_month is None else self.run_period_begin_day_of_month
+        obj.Begin_Year = obj.Begin_Year if self.run_period_begin_year is None else self.run_period_begin_year
+        obj.End_Month = obj.End_Month if self.run_period_end_month is None else self.run_period_end_month
+        obj.End_Day_of_Month = obj.End_Day_of_Month if self.run_period_end_day_of_month is None else self.run_period_end_day_of_month
+        obj.End_Year = obj.End_Year if self.run_period_end_year is None else self.run_period_end_year
 
         # update simulation time step
         idf.idfobjects['Timestep'] = []
