@@ -112,33 +112,59 @@ class TrainData:
 
     @output_variables.setter
     def output_variables(self,output_variables):
-        default_output_variables = [
-            'Electric Equipment Electricity Energy',
-            'Exterior Lights Electricity Energy',
-            'Lights Electricity Energy',
-            'Other Equipment Convective Heating Energy',
-            'Other Equipment Convective Heating Rate',
+        default_output_variables = []
+
+        #  weather_variables
+        default_output_variables += [
             'Site Diffuse Solar Radiation Rate per Area', 
             'Site Direct Solar Radiation Rate per Area',
             'Site Outdoor Air Drybulb Temperature',
             'Site Outdoor Air Relative Humidity',
-            'Water Heater Use Side Heat Transfer Energy', 
-            'Zone Air Relative Humidity',
-            'Zone Air System Sensible Cooling Energy',
-            'Zone Air System Sensible Heating Energy',
+        ]
+
+        # electric_equipment_variables
+        default_output_variables += [
+            'Zone Electric Equipment Electricity Rate',
+            'Zone Lights Electricity Rate',
+        ]
+
+        # mechanical_hvac_variables
+        default_output_variables += [
+            'Air System Total Cooling Energy',
+            'Air System Total Heating Energy',
             'Zone Air System Sensible Cooling Rate',
             'Zone Air System Sensible Heating Rate',
-            'Zone Air Temperature',
-            'Zone Ideal Loads Zone Sensible Cooling Energy',
-            'Zone Ideal Loads Zone Sensible Heating Energy',
+        ]
+
+        # ideal_load_variables
+        default_output_variables += [
             'Zone Ideal Loads Zone Sensible Cooling Rate',
             'Zone Ideal Loads Zone Sensible Heating Rate',
-            'Zone People Occupant Count',
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Energy',
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate',
+        ]
+
+        # other_equipment_variables
+        default_output_variables += [
+            'Other Equipment Convective Heating Rate',
+        ]
+
+        # dhw_variables
+        default_output_variables += [
+            'Water Use Equipment Heating Rate',
+        ]
+
+        # ieq_variables
+        default_output_variables += [
+            'Zone Air Relative Humidity',
+            'Zone Air Temperature',
             'Zone Thermostat Cooling Setpoint Temperature',
             'Zone Thermostat Heating Setpoint Temperature',
         ]
+
+        # occupancy_variables
+        default_output_variables += [
+            'Zone People Occupant Count',
+        ]
+
         self.__output_variables = default_output_variables if output_variables is None else output_variables
 
     @timesteps_per_hour.setter
