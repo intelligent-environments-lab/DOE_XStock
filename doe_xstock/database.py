@@ -1,4 +1,5 @@
 import math
+import re
 import sqlite3
 import numpy as np
 import pandas as pd
@@ -17,7 +18,10 @@ class SQLiteDatabase:
         self.__filepath = filepath
 
     def __get_connection(self):
-        return sqlite3.connect(self.filepath)
+        con = sqlite3.connect(self.filepath)
+        con = self.create_functions(con)
+
+        return con
 
     def __validate_query(self,query):
         query = query.replace(',)',')')
@@ -200,3 +204,14 @@ class SQLiteDatabase:
         sqlite3.register_adapter(np.int64,lambda x: int(x))
         sqlite3.register_adapter(np.int32,lambda x: int(x))
         sqlite3.register_adapter(np.datetime64,lambda x: np.datetime_as_string(x,unit='s').replace('T',' '))
+
+    # SQL custom functions
+    def create_functions(self, con):
+        con.create_function('REGEXP', 2, self.__regexp)
+
+        return con
+    
+    def __regexp(self, expr, item):
+        reg = re.compile(expr)
+        
+        return reg.search(item) is not None
