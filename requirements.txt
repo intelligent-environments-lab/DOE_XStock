@@ -1,6 +1,5 @@
 beautifulsoup4==4.8.0
 eppy==0.5.57
-ipykernel
 matplotlib==3.3.4
 meteostat==1.6.5
 openstudio==3.3.0
