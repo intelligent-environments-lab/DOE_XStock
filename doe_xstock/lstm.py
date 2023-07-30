@@ -197,7 +197,7 @@ class TrainData:
 
         LOGGER.debug('Post processing partial load iterations.')
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            results = [executor.submit(self.__post_process_partial_load_simulation,*[s]) for s in simulators]
+            results = [executor.submit(self.post_process_partial_load_simulation,*[s]) for s in simulators]
 
             for _, future in enumerate(concurrent.futures.as_completed(results)):
                 try:
@@ -210,7 +210,7 @@ class TrainData:
         LOGGER.info('Ended simulation.')
         return self.__partial_loads_data
 
-    def __post_process_partial_load_simulation(self,simulator):            
+    def post_process_partial_load_simulation(self,simulator):            
         # create zone conditioning table
         zones = self.set_zones(simulator)
         self.__insert_zone_metadata(simulator, zones)
