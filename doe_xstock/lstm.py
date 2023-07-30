@@ -210,10 +210,11 @@ class TrainData:
         LOGGER.info('Ended simulation.')
         return self.__partial_loads_data
 
-    def post_process_partial_load_simulation(self,simulator):            
+    @classmethod
+    def post_process_partial_load_simulation(cls, simulator):            
         # create zone conditioning table
-        zones = self.set_zones(simulator)
-        self.__insert_zone_metadata(simulator, zones)
+        zones = TrainData.set_zones(simulator)
+        TrainData.__insert_zone_metadata(simulator, zones)
         conditioned_zone_names = [f'\'{k}\'' for k,v in zones.items() if v['is_cooled']==1 or v['is_heated']==1]
         conditioned_zone_names = ','.join(conditioned_zone_names)
 
@@ -308,13 +309,15 @@ class TrainData:
 
         return schedule
 
-    def __insert_zone_metadata(self, simulator, zones):
+    @classmethod
+    def __insert_zone_metadata(cls, simulator, zones):
         data = pd.DataFrame([v for _,v in zones.items()])
         query_filepath = os.path.join(os.path.dirname(__file__),'misc/queries/set_lstm_zone_metadata.sql')
         simulator.get_database().execute_sql_from_file(query_filepath)
         simulator.get_database().insert('zone_metadata',data.columns.tolist(),data.values,)
 
-    def set_zones(self, simulator):
+    @classmethod
+    def set_zones(cls, simulator):
         query_filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_lstm_zone_conditioning.sql')
         data = simulator.get_database().query_table_from_file(query_filepath)
         zones = {z['zone_name']:z for z in data.to_dict('records')}
