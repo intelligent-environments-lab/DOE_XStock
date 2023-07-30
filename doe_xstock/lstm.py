@@ -188,9 +188,9 @@ class TrainData:
 
     def simulate_partial_loads(self):
         LOGGER.info('Started simulation.')
-        self.__set_simulator()
+        self.set_simulator()
         seeds = [i for i in range(self.iterations + 3)]
-        simulators = [self.__get_partial_load_simulator(i, seed=s) for i, s in enumerate(seeds)]
+        simulators = [self.get_partial_load_simulator(i, seed=s) for i, s in enumerate(seeds)]
         LOGGER.debug('Simulating partial load iterations.')
         Simulator.multi_simulate(simulators, max_workers=self.max_workers)
         self.__partial_loads_data = {}
@@ -225,7 +225,7 @@ class TrainData:
         
         return simulator.simulation_id, data
 
-    def __get_partial_load_simulator(self,reference,seed=None):
+    def get_partial_load_simulator(self,reference,seed=None):
         idf = self.__simulator.get_idf_object()
         simulation_id = f'{self.kwargs["simulation_id"]}-{reference}-partial'
         output_directory = os.path.join(self.kwargs['output_directory'], simulation_id)
@@ -321,7 +321,7 @@ class TrainData:
 
         return zones
 
-    def __set_simulator(self):
+    def set_simulator(self):
         osm_editor = OpenStudioModelEditor(self.osm)
         idf = osm_editor.forward_translate()
 
