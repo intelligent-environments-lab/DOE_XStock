@@ -205,7 +205,7 @@ class CityLearnData:
                 c_accuracy = [0.3, 0.65, 1.35]
             
             else:
-                c_accuracy = [2.5, 5.0, 10.0]
+                c_accuracy = [0.025, 0.05, 0.1]
 
             for s, a in zip(c_shifts, c_accuracy):
                 arr = np.roll(data[c], shift=-s)
