@@ -64,8 +64,8 @@ WITH u AS (
         MAX(CASE WHEN d.Name = 'Site Outdoor Air Drybulb Temperature' THEN Value END) AS outdoor_air_temperature,
         SUM(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS average_indoor_air_temperature,
         SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS occupant_count,
-        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Cooling Rate' THEN Value END) AS cooling_load,
-        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Heating Rate' THEN Value END) AS heating_load,
+        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Cooling Rate' THEN ABS(Value)/(1000.0) END) AS cooling_load,
+        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Heating Rate' THEN ABS(Value)/(1000.0) END) AS heating_load,
         MIN(CASE WHEN d.Name = 'Zone Thermostat Cooling Setpoint Temperature' THEN Value END) AS setpoint
     FROM u
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = u.ReportDataDictionaryIndex
