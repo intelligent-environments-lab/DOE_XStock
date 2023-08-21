@@ -15,12 +15,23 @@ logging.config.dictConfig(logging_config)
 LOGGER = logging.getLogger('doe_xstock_a')
 
 class TrainData:
-    def __init__(self,idd_filepath,osm,epw,schedules,setpoints,output_variables=None,timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs):
+    def __init__(
+            self,idd_filepath,osm,epw,schedules,setpoints,run_period_begin_month=None,
+            run_period_begin_day_of_month=None,run_period_begin_year=None,run_period_end_month=None,
+            run_period_end_day_of_month=None,run_period_end_year=None,output_variables=None,
+            timesteps_per_hour=None,iterations=None,max_workers=None,seed=None,**kwargs
+        ):
         self.idd_filepath = idd_filepath
         self.osm = osm
         self.epw = epw
         self.schedules = schedules
         self.setpoints = setpoints
+        self.run_period_begin_month = run_period_begin_month
+        self.run_period_begin_day_of_month = run_period_begin_day_of_month
+        self.run_period_begin_year = run_period_begin_year
+        self.run_period_end_month = run_period_end_month
+        self.run_period_end_day_of_month = run_period_end_day_of_month
+        self.run_period_end_year = run_period_end_year
         self.output_variables = output_variables
         self.timesteps_per_hour = timesteps_per_hour
         self.iterations = iterations
@@ -101,33 +112,59 @@ class TrainData:
 
     @output_variables.setter
     def output_variables(self,output_variables):
-        default_output_variables = [
-            'Electric Equipment Electricity Energy',
-            'Exterior Lights Electricity Energy',
-            'Lights Electricity Energy',
-            'Other Equipment Convective Heating Energy',
-            'Other Equipment Convective Heating Rate',
+        default_output_variables = []
+
+        #  weather_variables
+        default_output_variables += [
             'Site Diffuse Solar Radiation Rate per Area', 
             'Site Direct Solar Radiation Rate per Area',
             'Site Outdoor Air Drybulb Temperature',
             'Site Outdoor Air Relative Humidity',
-            'Water Heater Use Side Heat Transfer Energy', 
-            'Zone Air Relative Humidity',
-            'Zone Air System Sensible Cooling Energy',
-            'Zone Air System Sensible Heating Energy',
+        ]
+
+        # electric_equipment_variables
+        default_output_variables += [
+            'Zone Electric Equipment Electricity Rate',
+            'Zone Lights Electricity Rate',
+        ]
+
+        # mechanical_hvac_variables
+        default_output_variables += [
+            'Air System Total Cooling Energy',
+            'Air System Total Heating Energy',
             'Zone Air System Sensible Cooling Rate',
             'Zone Air System Sensible Heating Rate',
-            'Zone Air Temperature',
-            'Zone Ideal Loads Zone Sensible Cooling Energy',
-            'Zone Ideal Loads Zone Sensible Heating Energy',
+        ]
+
+        # ideal_load_variables
+        default_output_variables += [
             'Zone Ideal Loads Zone Sensible Cooling Rate',
             'Zone Ideal Loads Zone Sensible Heating Rate',
-            'Zone People Occupant Count',
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Energy',
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate',
+        ]
+
+        # other_equipment_variables
+        default_output_variables += [
+            'Other Equipment Convective Heating Rate',
+        ]
+
+        # dhw_variables
+        default_output_variables += [
+            'Water Use Equipment Heating Rate',
+        ]
+
+        # ieq_variables
+        default_output_variables += [
+            'Zone Air Relative Humidity',
+            'Zone Air Temperature',
             'Zone Thermostat Cooling Setpoint Temperature',
             'Zone Thermostat Heating Setpoint Temperature',
         ]
+
+        # occupancy_variables
+        default_output_variables += [
+            'Zone People Occupant Count',
+        ]
+
         self.__output_variables = default_output_variables if output_variables is None else output_variables
 
     @timesteps_per_hour.setter
@@ -151,16 +188,16 @@ class TrainData:
 
     def simulate_partial_loads(self):
         LOGGER.info('Started simulation.')
-        self.__set_simulator()
+        self.set_simulator()
         seeds = [i for i in range(self.iterations + 3)]
-        simulators = [self.__get_partial_load_simulator(i, seed=s) for i, s in enumerate(seeds)]
+        simulators = [self.get_partial_load_simulator(i, seed=s) for i, s in enumerate(seeds)]
         LOGGER.debug('Simulating partial load iterations.')
         Simulator.multi_simulate(simulators, max_workers=self.max_workers)
         self.__partial_loads_data = {}
 
         LOGGER.debug('Post processing partial load iterations.')
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            results = [executor.submit(self.__post_process_partial_load_simulation,*[s]) for s in simulators]
+            results = [executor.submit(self.post_process_partial_load_simulation,*[s]) for s in simulators]
 
             for _, future in enumerate(concurrent.futures.as_completed(results)):
                 try:
@@ -173,10 +210,11 @@ class TrainData:
         LOGGER.info('Ended simulation.')
         return self.__partial_loads_data
 
-    def __post_process_partial_load_simulation(self,simulator):            
+    @classmethod
+    def post_process_partial_load_simulation(cls, simulator):            
         # create zone conditioning table
-        zones = self.set_zones(simulator)
-        self.__insert_zone_metadata(simulator, zones)
+        zones = TrainData.set_zones(simulator)
+        TrainData.__insert_zone_metadata(simulator, zones)
         conditioned_zone_names = [f'\'{k}\'' for k,v in zones.items() if v['is_cooled']==1 or v['is_heated']==1]
         conditioned_zone_names = ','.join(conditioned_zone_names)
 
@@ -188,7 +226,7 @@ class TrainData:
         
         return simulator.simulation_id, data
 
-    def __get_partial_load_simulator(self,reference,seed=None):
+    def get_partial_load_simulator(self,reference,seed=None):
         idf = self.__simulator.get_idf_object()
         simulation_id = f'{self.kwargs["simulation_id"]}-{reference}-partial'
         output_directory = os.path.join(self.kwargs['output_directory'], simulation_id)
@@ -271,20 +309,22 @@ class TrainData:
 
         return schedule
 
-    def __insert_zone_metadata(self, simulator, zones):
+    @classmethod
+    def __insert_zone_metadata(cls, simulator, zones):
         data = pd.DataFrame([v for _,v in zones.items()])
         query_filepath = os.path.join(os.path.dirname(__file__),'misc/queries/set_lstm_zone_metadata.sql')
         simulator.get_database().execute_sql_from_file(query_filepath)
         simulator.get_database().insert('zone_metadata',data.columns.tolist(),data.values,)
 
-    def set_zones(self, simulator):
+    @classmethod
+    def set_zones(cls, simulator):
         query_filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_lstm_zone_conditioning.sql')
         data = simulator.get_database().query_table_from_file(query_filepath)
         zones = {z['zone_name']:z for z in data.to_dict('records')}
 
         return zones
 
-    def __set_simulator(self):
+    def set_simulator(self):
         osm_editor = OpenStudioModelEditor(self.osm)
         idf = osm_editor.forward_translate()
 
@@ -296,10 +336,6 @@ class TrainData:
         except:
             self.__errors.append(1)
             raise EnergyPlusSimulationError
-
-        # write_data(self.osm, 'test.osm')
-        # write_data(osm_editor.forward_translate(), 'test.idf')
-        # assert False
 
         self.__simulator = Simulator(
             self.idd_filepath,
@@ -313,6 +349,15 @@ class TrainData:
     def __preprocess_idf(self):
         # idf object
         idf = self.__simulator.get_idf_object()
+
+        # update run period
+        obj = idf.idfobjects['RunPeriod'][0]
+        obj.Begin_Month = obj.Begin_Month if self.run_period_begin_month is None else self.run_period_begin_month
+        obj.Begin_Day_of_Month = obj.Begin_Day_of_Month if self.run_period_begin_day_of_month is None else self.run_period_begin_day_of_month
+        obj.Begin_Year = obj.Begin_Year if self.run_period_begin_year is None else self.run_period_begin_year
+        obj.End_Month = obj.End_Month if self.run_period_end_month is None else self.run_period_end_month
+        obj.End_Day_of_Month = obj.End_Day_of_Month if self.run_period_end_day_of_month is None else self.run_period_end_day_of_month
+        obj.End_Year = obj.End_Year if self.run_period_end_year is None else self.run_period_end_year
 
         # update simulation time step
         idf.idfobjects['Timestep'] = []

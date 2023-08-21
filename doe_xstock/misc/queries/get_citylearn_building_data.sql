@@ -39,10 +39,9 @@ WITH u AS (
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
     WHERE 
         d.Name IN (
-            'Water Heater Use Side Heat Transfer Energy',
-            'Exterior Lights Electricity Energy',
-            'Lights Electricity Energy',
-            'Electric Equipment Electricity Energy',
+            'Water Use Equipment Heating Rate',
+            'Zone Lights Electricity Rate',
+            'Zone Electric Equipment Electricity Rate',
             'Zone People Occupant Count'
         )
 ), p AS (
@@ -50,8 +49,8 @@ WITH u AS (
         u.TimeIndex,
         SUM(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS "Indoor Temperature (C)",
         SUM(CASE WHEN d.Name = 'Zone Air Relative Humidity' THEN Value END) AS "Indoor Relative Humidity (%)",
-        SUM(CASE WHEN d.Name IN ('Exterior Lights Electricity Energy', 'Lights Electricity Energy', 'Electric Equipment Electricity Energy') THEN Value/(3600.0*1000.0) END) AS "Equipment Electric Power (kWh)",
-        SUM(CASE WHEN d.Name = 'Water Heater Use Side Heat Transfer Energy' THEN ABS(Value)/(3600.0*1000.0) END) AS "DHW Heating (kWh)",
+        SUM(CASE WHEN d.Name IN ('Zone Lights Electricity Rate', 'Zone Electric Equipment Electricity Rate') THEN Value/(1000.0) END) AS "Equipment Electric Power (kWh)",
+        SUM(CASE WHEN d.Name = 'Water Use Equipment Heating Rate' THEN ABS(Value)/(1000.0) END) AS "DHW Heating (kWh)",
         SUM(CASE WHEN d.Name = 'Zone Air System Sensible Cooling Rate' THEN ABS(Value)/(1000.0) END) AS "Cooling Load (kWh)",
         SUM(CASE WHEN d.Name = 'Zone Air System Sensible Heating Rate' THEN ABS(Value)/(1000.0) END) AS "Heating Load (kWh)",
         SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS "Occupancy",

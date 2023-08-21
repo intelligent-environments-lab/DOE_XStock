@@ -164,32 +164,52 @@ class MeteostatWeather:
 
 class CityLearnData:
     @staticmethod
-    def get_building_data(**kwargs):
-        database = CityLearnData.get_database(**kwargs)
+    def get_building_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None):
+        database = CityLearnData.get_database(
+            dataset_type, 
+            weather_data, 
+            year_of_publication, 
+            release, 
+            bldg_id, 
+            simulation_output_directory, 
+            simulation_id=simulation_id
+        )
         filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_building_data.sql')
         data = database.query_table_from_file(filepath)
 
         return data
     
     @staticmethod
-    def get_weather_data(**kwargs):
-        database = CityLearnData.get_database(**kwargs)
+    def get_weather_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, shifts=None, accuracy=None, random_seed=None):
+        database = CityLearnData.get_database(
+            dataset_type, 
+            weather_data, 
+            year_of_publication, 
+            release, 
+            bldg_id, 
+            simulation_output_directory, 
+            simulation_id=simulation_id
+        )
         filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_weather_data.sql')
         data = database.query_table_from_file(filepath)
-
-        shifts = [6, 12, 24]
         columns = data.columns
+        random_seed = 1 if random_seed is None else random_seed
 
         for c in columns:
-            if c == 'Outdoor Drybulb Temperature (C)':
-                accuracy = [0.3, 0.65, 1.35]
+            c_shifts = [6, 12, 24] if shifts is None or c not in shifts.keys() else shifts[c]
+
+            if accuracy is not None and c in accuracy.keys():
+                c_accuracy = accuracy[c]
+
+            elif c == 'Outdoor Drybulb Temperature (C)':
+                c_accuracy = [0.3, 0.65, 1.35]
             
             else:
-                accuracy = [2.5, 5.0, 10.0]
+                c_accuracy = [0.025, 0.05, 0.1]
 
-            for s, a in zip(shifts, accuracy):
+            for s, a in zip(c_shifts, c_accuracy):
                 arr = np.roll(data[c], shift=-s)
-                random.seed(int(arr.mean()))
+                random.seed(s*random_seed)
 
                 if c in ['Outdoor Drybulb Temperature (C)']:
                     data[f'{s}h {c}'] = arr + np.random.uniform(-a, a, len(arr))
@@ -215,15 +235,9 @@ class CityLearnData:
         return data
     
     @staticmethod
-    def get_database(**kwargs):
-        simulation_output_directory = kwargs.get('energyplus_output_directory','energyplus_output')
-        dataset_type = kwargs['dataset_type']
-        weather_data = kwargs['weather_data']
-        year_of_publication = kwargs['year_of_publication']
-        release = kwargs['release']
-        bldg_id = kwargs['bldg_id']
+    def get_database(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None):
         simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'\
-            if kwargs.get('simulation_id') is None else kwargs['simulation_id']
+            if simulation_id is None else simulation_id
         output_directory = os.path.join(simulation_output_directory, f'{simulation_id}')
         simulation_reference_id = f'{simulation_id}-0-partial'
         filepath = os.path.join(
