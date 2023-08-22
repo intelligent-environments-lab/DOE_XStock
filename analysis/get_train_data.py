@@ -134,7 +134,7 @@ def main():
         """)
         
         # first simulation is to get the weighted average temperature for the as-is model (mechanical system loads)
-        mechanical_loads_data = pd.DataFrame(ltd.get_ideal_loads_data()['temperature'])
+        mechanical_loads_data = pd.DataFrame(ltd.get_design_loads_data()['temperature'])
         mechanical_loads_data['metadata_id'] = metadata_id
         queries.append(f"""
         INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)

@@ -20,7 +20,7 @@ from doe_xstock.database import SQLiteDatabase
 from doe_xstock.exploration import MetadataClustering
 from doe_xstock.lstm import TrainData, EnergyPlusSimulationError
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
-from doe_xstock.utilities import read_json, write_data
+from doe_xstock.utilities import read_json, write_data, write_json
 
 logging_config = read_json(os.path.join(os.path.dirname(__file__),'misc/logging_config.json'))
 logging.config.dictConfig(logging_config)
@@ -180,18 +180,18 @@ class DOEXStock:
             simulation_id=simulation_id,
             output_directory=output_directory,
         )
-        queries, values, partial_loads_data_list = [], [], []
 
         # delete any existing simulations for metadata_id
         database.query(f"""
         PRAGMA foreign_keys = ON;
         DELETE FROM energyplus_simulation WHERE metadata_id = {metadata_id};
         DELETE FROM energyplus_simulation_error WHERE metadata_id = {metadata_id};
+        DELETE FROM static_lstm_train_data WHERE metadata_id = {metadata_id};
         """)
         
         # run ideal air loads system and other equipment simulations
         try:
-            partial_loads_data = ltd.simulate_partial_loads()
+            design_loads_data, partial_loads_data = ltd.run()
         
         except EnergyPlusSimulationError:
             errors = pd.DataFrame(ltd.errors, columns=['description_id'])
@@ -204,28 +204,58 @@ class DOEXStock:
             LOGGER.debug(f'Simulation for bldg_id={bldg_id} terminated with errors: {ltd.errors}.')
             return False
         
-        for simulation_id, data in partial_loads_data.items():
-            data = pd.DataFrame(data)
-            data['metadata_id'] = metadata_id
-            data['reference'] = int(simulation_id.split('-')[-2])
-            partial_loads_data_list.append(data)
+        queries, values, data_list = [], [], []
 
-        partial_loads_data = pd.concat(partial_loads_data_list, ignore_index=True, sort=False)
+        # set insert query and value for energyplus_simulation table
         queries.append(f"""
         INSERT INTO energyplus_simulation (metadata_id, reference, ecobee_building_id)
-        VALUES (:metadata_id, :reference, {ecobee_id if ecobee_id is not None else 'NULL'})
-        ;""")
-        values.append(partial_loads_data.groupby(['metadata_id','reference']).size().reset_index().to_dict('records'))
+        VALUES ({metadata_id}, :reference, {'NULL' if ecobee_id is None else ecobee_id})
+        """)
+        references = list(design_loads_data.keys()) + list(partial_loads_data.keys())
+        energyplus_simulation_data = [{'reference': i,} for i in references]
+        values.append(energyplus_simulation_data)
+        data_list = []
+
+        # set insert query and value for dynamic_lstm_train_data table
+        for k, v in design_loads_data.items():
+            data = pd.DataFrame(v['load'])
+            data = data.groupby(['timestep'])[['cooling_load', 'heating_load']].sum()
+            data = data.reset_index()
+            data['average_indoor_air_temperature'] = v['temperature']['value']
+            data['reference'] = k
+            data_list.append(data)
+
+        for k, v in partial_loads_data.items():
+            data = pd.DataFrame(v)
+            data['reference'] = k
+            data_list.append(data)
+
+        data = pd.concat(data_list, ignore_index=True)
+
         queries.append(f"""
-        INSERT INTO lstm_train_data (
-            simulation_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation, diffuse_solar_radiation,
-            outdoor_air_temperature, average_indoor_air_temperature, occupant_count, cooling_load, heating_load, setpoint
+        INSERT INTO dynamic_lstm_train_data (
+            simulation_id, timestep, average_indoor_air_temperature,
+            cooling_load, heating_load
+        )
+        VALUES (
+            (SELECT id FROM energyplus_simulation WHERE metadata_id = {metadata_id} AND reference = :reference),
+            :timestep, :average_indoor_air_temperature, :cooling_load, :heating_load
+        )
+        ;""")
+        values.append(data.to_dict('records'))
+
+        # set insert query and value for static_lstm_train_data table
+        queries.append(f"""
+        INSERT INTO static_lstm_train_data (
+            metadata_id, timestep, month, day, day_name, day_of_week, hour, minute, direct_solar_radiation,
+            diffuse_solar_radiation, outdoor_air_temperature, occupant_count, setpoint
         ) VALUES (
-            (SELECT id FROM energyplus_simulation WHERE metadata_id = :metadata_id AND reference = :reference),
-            :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation, :diffuse_solar_radiation,
-            :outdoor_air_temperature, :average_indoor_air_temperature, :occupant_count, :cooling_load, :heating_load, :setpoint
+            {metadata_id}, :timestep, :month, :day, :day_name, :day_of_week, :hour, :minute, :direct_solar_radiation,
+            :diffuse_solar_radiation, :outdoor_air_temperature, :occupant_count, :setpoint
         );""")
-        values.append(partial_loads_data.to_dict('records'))
+        values.append(data[data['reference']==max(references)].to_dict('records'))
+        
+        # finally, write to database
         database.insert_batch(queries, values)
 
         return True

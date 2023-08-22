@@ -11,21 +11,31 @@ WITH u AS (
 
     UNION ALL
 
-    -- thermal load variables
+    -- setpoint variables
     SELECT
         r.TimeIndex,
         r.ReportDataDictionaryIndex,
-        'thermal_load' AS label,
+        'setpoint' AS label,
         r.Value
     FROM ReportData r
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
     LEFT JOIN Zones z ON z.ZoneName = d.KeyValue
     WHERE 
-        d.Name IN (
-            'Zone Air System Sensible Cooling Rate', 
-            'Zone Air System Sensible Heating Rate', 
-            'Zone Thermostat Cooling Setpoint Temperature'
-        )
+        d.Name IN ('Zone Thermostat Cooling Setpoint Temperature')
+
+    UNION ALL
+
+    --  thermal load
+    SELECT
+        r.TimeIndex,
+        r.ReportDataDictionaryIndex,
+        CASE WHEN r.Value > 0 THEN 'heating_load' ELSE 'cooling_load' END AS label,
+        ABS(r.Value) AS Value
+    FROM ReportData r
+    LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
+    WHERE 
+        d.Name = 'Other Equipment Convective Heating Rate' AND
+        (d.KeyValue LIKE '%HEATING LOAD' OR d.KeyValue LIKE '%COOLING LOAD')
 
     UNION ALL
 
@@ -51,8 +61,8 @@ WITH u AS (
         SUM(CASE WHEN d.Name = 'Zone Air Relative Humidity' THEN Value END) AS "Indoor Relative Humidity (%)",
         SUM(CASE WHEN d.Name IN ('Zone Lights Electricity Rate', 'Zone Electric Equipment Electricity Rate') THEN Value/(1000.0) END) AS "Equipment Electric Power (kWh)",
         SUM(CASE WHEN d.Name = 'Water Use Equipment Heating Rate' THEN ABS(Value)/(1000.0) END) AS "DHW Heating (kWh)",
-        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Cooling Rate' THEN ABS(Value)/(1000.0) END) AS "Cooling Load (kWh)",
-        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Heating Rate' THEN ABS(Value)/(1000.0) END) AS "Heating Load (kWh)",
+        SUM(CASE WHEN u.label = 'cooling_load' THEN Value/1000.0 END) AS cooling_load,
+        SUM(CASE WHEN u.label = 'heating_load' THEN Value/1000.0 END) AS heating_load,
         SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS "Occupancy",
         MAX(CASE WHEN d.Name = 'Zone Thermostat Cooling Setpoint Temperature' THEN Value END) AS "Temperature Set Point (C)"
     FROM u
