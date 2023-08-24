@@ -1,3 +1,9 @@
+-- PRAGMA foreign_keys = ON;
+-- DELETE FROM energyplus_simulation;
+-- DELETE FROM energyplus_simulation_error;
+-- DELETE FROM static_lstm_train_data;
+-- DELETE FROM dynamic_lstm_train_data;
+
 -- SELECT 
 --     bldg_id,
 --     in_resstock_county_id,
