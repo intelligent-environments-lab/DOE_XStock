@@ -54,11 +54,6 @@ CREATE TABLE IF NOT EXISTS energyplus_simulation_error_description (
     UNIQUE (description)
 );
 
-INSERT OR IGNORE INTO energyplus_simulation_error_description (id, description)
-VALUES 
-    (1, 'forward translate error: air loop not found in osm and thermostat not found in idf')
-;
-
 CREATE TABLE IF NOT EXISTS energyplus_simulation_error (
     id INTEGER NOT NULL,
     metadata_id INTEGER NOT NULL,
