@@ -29,11 +29,6 @@ class OpenStudioModelEditor:
     def use_ideal_loads_air_system(self):
         # Reference: https://www.rubydoc.info/gems/openstudio-standards/Standard#remove_hvac-instance_method
         osm = self.get_model()
-        ideal_loads_flags = []
-
-        # identify which zones are conditioned
-        for zone in osm.getThermalZones():
-            ideal_loads_flags.append(zone.airLoopHVAC().is_initialized())
 
         # remove air loop hvac
         for air_loop in osm.getAirLoopHVACs():
@@ -78,9 +73,9 @@ class OpenStudioModelEditor:
                 pass
 
         # add ideal load system
-        for zone, f in zip(osm.getThermalZones(), ideal_loads_flags):
-            # check if zone has thermostat
-            zone.setUseIdealAirLoads(f)
+        for zone in osm.getThermalZones():
+            has_thermostat = zone.thermostat().is_initialized()
+            zone.setUseIdealAirLoads(has_thermostat)
             
         osm = str(osm)
         self.osm = osm
