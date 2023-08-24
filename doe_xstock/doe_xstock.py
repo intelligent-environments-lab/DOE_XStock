@@ -117,6 +117,8 @@ class DOEXStock:
         release = kwargs['release']
         bldg_id = kwargs['bldg_id']
 
+        LOGGER.debug(f'Started setting LSTM train_data for bldg_id={bldg_id}.')
+
         # get relevant simulation input parameters
         simulation_data = database.query_table(f"""
         SELECT 
@@ -193,15 +195,15 @@ class DOEXStock:
         try:
             design_loads_data, partial_loads_data = ltd.run()
         
-        except EnergyPlusSimulationError:
-            errors = pd.DataFrame(ltd.errors, columns=['description_id'])
-            errors['metadata_id'] = metadata_id
-            database.insert(
-                'energyplus_simulation_error',
-                errors.columns.tolist(),
-                errors.values,
-            )
-            LOGGER.debug(f'Simulation for bldg_id={bldg_id} terminated with errors: {ltd.errors}.')
+        except EnergyPlusSimulationError as e:
+            query = f"""
+            INSERT OR IGNORE INTO energyplus_simulation_error_description (id, description)
+            VALUES ({e.error_id}, '{e.message}');
+            INSERT OR IGNORE INTO energyplus_simulation_error (metadata_id, description_id)
+            VALUES ({metadata_id}, {e.error_id});
+            """
+            _ = database.query(query)
+            LOGGER.debug(f'Simulation for bldg_id={bldg_id} terminated with errors: {e.error_id}: {e.message}.')
             return False
         
         queries, values, data_list = [], [], []
@@ -257,6 +259,8 @@ class DOEXStock:
         
         # finally, write to database
         database.insert_batch(queries, values)
+
+        LOGGER.debug(f'Ended setting LSTM train_data for bldg_id={bldg_id}.')
 
         return True
 
