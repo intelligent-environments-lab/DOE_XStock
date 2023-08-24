@@ -73,92 +73,6 @@ CREATE TABLE IF NOT EXISTS energyplus_simulation_error (
     UNIQUE (metadata_id, description_id)
 );
 
-DROP VIEW IF EXISTS dynamic_lstm_train_data_hourly_summary;
-CREATE VIEW IF NOT EXISTS dynamic_lstm_train_data_hourly_summary AS
-    WITH m AS (
-        SELECT
-            e.metadata_id,
-            t.*
-        FROM dynamic_lstm_train_data t
-        LEFT JOIN energyplus_simulation e ON e.id = t.simulation_id
-        WHERE t.simulation_id IN (SELECT id FROM energyplus_simulation WHERE reference = 0)
-    ), i AS (
-        SELECT
-            e.metadata_id,
-            t.*
-        FROM dynamic_lstm_train_data t
-        LEFT JOIN energyplus_simulation e ON e.id = t.simulation_id
-        WHERE t.simulation_id IN (SELECT id FROM energyplus_simulation WHERE reference = 1)
-    ), p AS (
-        SELECT
-            e.metadata_id,
-            t.*
-        FROM dynamic_lstm_train_data t
-        LEFT JOIN energyplus_simulation e ON e.id = t.simulation_id
-        WHERE t.simulation_id IN (SELECT id FROM energyplus_simulation WHERE reference = 2)
-    )
-
-    SELECT
-        m.metadata_id,
-        e.bldg_id,
-        e.in_resstock_county_id,
-        m.timestep,
-        CAST((m.timestep - 1)/24 AS INTEGER) AS day_index,
-        CAST((m.timestep - 1)/(24*30) AS INTEGER) AS month_index,
-        s.setpoint,
-        m.average_indoor_air_temperature AS mechanical_temperature,
-        i.average_indoor_air_temperature AS ideal_temperature,
-        p.average_indoor_air_temperature AS partial_temperature,
-        m.heating_load AS mechanical_heating_load,
-        i.heating_load AS ideal_heating_load,
-        p.heating_load AS partial_heating_load,
-        m.cooling_load AS mechanical_cooling_load,
-        i.cooling_load AS ideal_cooling_load,
-        p.cooling_load AS partial_cooling_load,
-        m.average_indoor_air_temperature - s.setpoint AS mechanical_setpoint_difference,
-        i.average_indoor_air_temperature - s.setpoint AS ideal_setpoint_difference,
-        p.average_indoor_air_temperature - s.setpoint AS partial_setpoint_difference,
-        i.average_indoor_air_temperature - m.average_indoor_air_temperature AS ideal_and_mechanical_temperature_difference,
-        p.average_indoor_air_temperature - i.average_indoor_air_temperature AS partial_and_ideal_temperature_difference,
-        i.heating_load - m.heating_load AS ideal_and_mechanical_heating_load_difference,
-        p.heating_load - i.heating_load AS partial_and_ideal_heating_load_difference,
-        i.cooling_load - m.cooling_load AS ideal_and_mechanical_cooling_load_difference,
-        p.cooling_load - i.cooling_load AS partial_and_ideal_cooling_load_difference,
-        (m.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint AS mechanical_setpoint_percent_difference,
-        (i.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint AS ideal_setpoint_percent_difference,
-        (p.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint AS partial_setpoint_percent_difference,
-        (i.average_indoor_air_temperature - m.average_indoor_air_temperature)*100.0/m.average_indoor_air_temperature AS ideal_and_mechanical_temperature_percent_difference,
-        (p.average_indoor_air_temperature - i.average_indoor_air_temperature)*100.0/i.average_indoor_air_temperature AS partial_and_ideal_temperature_percent_difference,
-        (i.heating_load - m.heating_load)*100.0/m.heating_load AS ideal_and_mechanical_heating_load_percent_difference,
-        (p.heating_load - i.heating_load)*100.0/i.heating_load AS partial_and_ideal_heating_load_percent_difference,
-        (i.cooling_load - m.cooling_load)*100.0/m.cooling_load AS ideal_and_mechanical_cooling_load_percent_difference,
-        (p.cooling_load - i.cooling_load)*100.0/i.cooling_load AS partial_and_ideal_cooling_load_percent_difference,
-        ABS(m.average_indoor_air_temperature - s.setpoint) AS mechanical_setpoint_absolute_difference,
-        ABS(i.average_indoor_air_temperature - s.setpoint) AS ideal_setpoint_absolute_difference,
-        ABS(p.average_indoor_air_temperature - s.setpoint) AS partial_setpoint_absolute_difference,
-        ABS(i.average_indoor_air_temperature - m.average_indoor_air_temperature) AS ideal_and_mechanical_temperature_absolute_difference,
-        ABS(p.average_indoor_air_temperature - i.average_indoor_air_temperature) AS partial_and_ideal_temperature_absolute_difference,
-        ABS(i.heating_load - m.heating_load) AS ideal_and_mechanical_heating_load_absolute_difference,
-        ABS(p.heating_load - i.heating_load) AS partial_and_ideal_heating_load_absolute_difference,
-        ABS(i.cooling_load - m.cooling_load) AS ideal_and_mechanical_cooling_load_absolute_difference,
-        ABS(p.cooling_load - i.cooling_load) AS partial_and_ideal_cooling_load_absolute_difference,
-        ABS((m.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint) AS mechanical_setpoint_absolute_percent_difference,
-        ABS((i.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint) AS ideal_setpoint_absolute_percent_difference,
-        ABS((p.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint) AS partial_setpoint_absolute_percent_difference,
-        ABS((i.average_indoor_air_temperature - m.average_indoor_air_temperature)*100.0/m.average_indoor_air_temperature) AS ideal_and_mechanical_temperature_absolute_percent_difference,
-        ABS((p.average_indoor_air_temperature - i.average_indoor_air_temperature)*100.0/i.average_indoor_air_temperature) AS partial_and_ideal_temperature_absolute_percent_difference,
-        ABS((i.heating_load - m.heating_load)*100.0/m.heating_load) AS ideal_and_mechanical_heating_load_absolute_percent_difference,
-        ABS((p.heating_load - i.heating_load)*100.0/i.heating_load) AS partial_and_ideal_heating_load_absolute_percent_difference,
-        ABS((i.cooling_load - m.cooling_load)*100.0/m.cooling_load) AS ideal_and_mechanical_cooling_load_absolute_percent_difference,
-        ABS((p.cooling_load - i.cooling_load)*100.0/i.cooling_load) AS partial_and_ideal_cooling_load_absolute_percent_difference
-    FROM m
-    LEFT JOIN i ON i.metadata_id = m.metadata_id AND i.timestep = m.timestep
-    LEFT JOIN p ON p.metadata_id = m.metadata_id AND p.timestep = m.timestep
-    LEFT JOIN static_lstm_train_data s ON s.metadata_id = m.metadata_id AND s.timestep = m.timestep
-    LEFT JOIN metadata e ON e.id = m.metadata_id
-;
-
-DROP VIEW IF EXISTS dynamic_lstm_train_data_multi_resolution_summary;
 CREATE VIEW IF NOT EXISTS dynamic_lstm_train_data_multi_resolution_summary AS
     SELECT
         t.metadata_id,
@@ -617,62 +531,249 @@ CREATE VIEW IF NOT EXISTS dynamic_lstm_train_data_multi_resolution_summary AS
         t.in_resstock_county_id
 ;
 
--- DROP VIEW IF EXISTS energyplus_simulation_monthly_unmet_hour_summary;
--- CREATE VIEW energyplus_simulation_monthly_unmet_hour_summary AS
---     WITH t AS (
---         SELECT
---             m.id AS metadata_id,
---             m.bldg_id,
---             m.in_resstock_county_id,
---             l.month,
---             MIN(l.timestep) AS min_timestep,
---             MAX(l.timestep) AS max_timestep,
---             COUNT(l.timestep) AS count_timestep,
---             TOTAL(CASE WHEN ABS(l.average_indoor_air_temperature - l.setpoint) > 2.0 THEN 1 END) AS count_unmet_hour,
---             TOTAL(CASE WHEN l.average_indoor_air_temperature - l.setpoint < -2.0 THEN 1 END) AS count_cold_hour,
---             TOTAL(CASE WHEN l.average_indoor_air_temperature - l.setpoint > 2.0 THEN 1 END) AS count_hot_hour,
---             MIN(l.average_indoor_air_temperature - l.setpoint) AS min_delta,
---             MAX(l.average_indoor_air_temperature - l.setpoint) AS max_delta,
---             AVG(l.average_indoor_air_temperature - l.setpoint) AS avg_delta
---         FROM lstm_train_data l
---         LEFT JOIN energyplus_simulation s ON s.id = l.simulation_id
---         LEFT JOIN metadata m ON m.id = s.metadata_id
---         WHERE l.simulation_id IN (
---             SELECT id FROM energyplus_simulation WHERE 
---                 reference = 0 
---                 AND metadata_id IN (SELECT metadata_id FROM thermal_zone_count WHERE value = 1)
---         )
---         GROUP BY
---             m.id,
---             m.bldg_id,
---             m.in_resstock_county_id,
---             l.month
---     )
+CREATE VIEW IF NOT EXISTS dynamic_lstm_train_data_thermal_comfort_summary AS
+    WITH d AS (
+        SELECT
+            t.metadata_id,
+            t.bldg_id,
+            t.in_resstock_county_id,
+            t.timestep,
+            t.day_index,
+            t.month_index,
+            CASE WHEN t.mechanical_setpoint_absolute_difference > 0.5 THEN 1 ELSE 0 END AS point_five_degree_mechanical_unmet,
+            CASE WHEN t.ideal_setpoint_absolute_difference > 0.5 THEN 1 ELSE 0 END AS point_five_degree_ideal_unmet,
+            CASE WHEN t.partial_setpoint_absolute_difference > 0.5 THEN 1 ELSE 0 END AS point_five_degree_partial_unmet,
+            CASE WHEN t.mechanical_setpoint_absolute_difference > 1.0 THEN 1 ELSE 0 END AS one_degree_mechanical_unmet,
+            CASE WHEN t.ideal_setpoint_absolute_difference > 1.0 THEN 1 ELSE 0 END AS one_degree_ideal_unmet,
+            CASE WHEN t.partial_setpoint_absolute_difference > 1.0 THEN 1 ELSE 0 END AS one_degree_partial_unmet,
+            CASE WHEN t.mechanical_setpoint_absolute_difference > 2.0 THEN 1 ELSE 0 END AS two_degree_mechanical_unmet,
+            CASE WHEN t.ideal_setpoint_absolute_difference > 2.0 THEN 1 ELSE 0 END AS two_degree_ideal_unmet,
+            CASE WHEN t.partial_setpoint_absolute_difference > 2.0 THEN 1 ELSE 0 END AS two_degree_partial_unmet,
+            CASE WHEN t.mechanical_setpoint_difference > 0.5 THEN 1 ELSE 0 END AS point_five_degree_mechanical_too_hot,
+            CASE WHEN t.ideal_setpoint_difference > 0.5 THEN 1 ELSE 0 END AS point_five_degree_ideal_too_hot,
+            CASE WHEN t.partial_setpoint_difference > 0.5 THEN 1 ELSE 0 END AS point_five_degree_partial_too_hot,
+            CASE WHEN t.mechanical_setpoint_difference > 1.0 THEN 1 ELSE 0 END AS one_degree_mechanical_too_hot,
+            CASE WHEN t.ideal_setpoint_difference > 1.0 THEN 1 ELSE 0 END AS one_degree_ideal_too_hot,
+            CASE WHEN t.partial_setpoint_difference > 1.0 THEN 1 ELSE 0 END AS one_degree_partial_too_hot,
+            CASE WHEN t.mechanical_setpoint_difference > 2.0 THEN 1 ELSE 0 END AS two_degree_mechanical_too_hot,
+            CASE WHEN t.ideal_setpoint_difference > 2.0 THEN 1 ELSE 0 END AS two_degree_ideal_too_hot,
+            CASE WHEN t.partial_setpoint_difference > 2.0 THEN 1 ELSE 0 END AS two_degree_partial_too_hot,
+            CASE WHEN t.mechanical_setpoint_difference < -0.5 THEN 1 ELSE 0 END AS point_five_degree_mechanical_too_cold,
+            CASE WHEN t.ideal_setpoint_difference < -0.5 THEN 1 ELSE 0 END AS point_five_degree_ideal_too_cold,
+            CASE WHEN t.partial_setpoint_difference < -0.5 THEN 1 ELSE 0 END AS point_five_degree_partial_too_cold,
+            CASE WHEN t.mechanical_setpoint_difference < -1.0 THEN 1 ELSE 0 END AS one_degree_mechanical_too_cold,
+            CASE WHEN t.ideal_setpoint_difference < -1.0 THEN 1 ELSE 0 END AS one_degree_ideal_too_cold,
+            CASE WHEN t.partial_setpoint_difference < -1.0 THEN 1 ELSE 0 END AS one_degree_partial_too_cold,
+            CASE WHEN t.mechanical_setpoint_difference < -2.0 THEN 1 ELSE 0 END AS two_degree_mechanical_too_cold,
+            CASE WHEN t.ideal_setpoint_difference < -2.0 THEN 1 ELSE 0 END AS two_degree_ideal_too_cold,
+            CASE WHEN t.partial_setpoint_difference < -2.0 THEN 1 ELSE 0 END AS two_degree_partial_too_cold
+        FROM dynamic_lstm_train_data_hourly_summary t
+    )
 
---     SELECT
---         t.metadata_id,
---         t.bldg_id,
---         t.in_resstock_county_id,
---         t.month,
---         l.label AS cluster_label,
---         t.min_timestep,
---         t.max_timestep,
---         t.count_timestep,
---         t.count_unmet_hour,
---         t.count_cold_hour,
---         t.count_hot_hour,
---         t.count_unmet_hour*100.0/t.count_timestep AS percent_unmet_hour,
---         t.count_cold_hour*100.0/t.count_timestep AS percent_cold_hour,
---         t.count_hot_hour*100.0/t.count_timestep AS percent_hot_hour,
---         t.min_delta,
---         t.max_delta,
---         t.avg_delta
---     FROM t
---     LEFT JOIN (
---         SELECT
---             metadata_id,
---             label
---         FROM metadata_clustering_label
---         WHERE clustering_id IN (SELECT clustering_id FROM optimal_metadata_clustering)
---     ) l ON l.metadata_id = t.metadata_id
--- ;
+    SELECT
+        d.metadata_id,
+        d.bldg_id,
+        d.in_resstock_county_id,
+        d.day_index AS timestep,
+        'daily' AS timestep_resolution,
+        SUM(d.point_five_degree_mechanical_unmet) AS point_five_degree_mechanical_unmet,
+        SUM(d.point_five_degree_ideal_unmet) AS point_five_degree_ideal_unmet,
+        SUM(d.point_five_degree_partial_unmet) AS point_five_degree_partial_unmet,
+        SUM(d.one_degree_mechanical_unmet) AS one_degree_mechanical_unmet,
+        SUM(d.one_degree_ideal_unmet) AS one_degree_ideal_unmet,
+        SUM(d.one_degree_partial_unmet) AS one_degree_partial_unmet,
+        SUM(d.two_degree_mechanical_unmet) AS two_degree_mechanical_unmet,
+        SUM(d.two_degree_ideal_unmet) AS two_degree_ideal_unmet,
+        SUM(d.two_degree_partial_unmet) AS two_degree_partial_unmet,
+        SUM(d.point_five_degree_mechanical_too_hot) AS point_five_degree_mechanical_too_hot,
+        SUM(d.point_five_degree_ideal_too_hot) AS point_five_degree_ideal_too_hot,
+        SUM(d.point_five_degree_partial_too_hot) AS point_five_degree_partial_too_hot,
+        SUM(d.one_degree_mechanical_too_hot) AS one_degree_mechanical_too_hot,
+        SUM(d.one_degree_ideal_too_hot) AS one_degree_ideal_too_hot,
+        SUM(d.one_degree_partial_too_hot) AS one_degree_partial_too_hot,
+        SUM(d.two_degree_mechanical_too_hot) AS two_degree_mechanical_too_hot,
+        SUM(d.two_degree_ideal_too_hot) AS two_degree_ideal_too_hot,
+        SUM(d.two_degree_partial_too_hot) AS two_degree_partial_too_hot,
+        SUM(d.point_five_degree_mechanical_too_cold) AS point_five_degree_mechanical_too_cold,
+        SUM(d.point_five_degree_ideal_too_cold) AS point_five_degree_ideal_too_cold,
+        SUM(d.point_five_degree_partial_too_cold) AS point_five_degree_partial_too_cold,
+        SUM(d.one_degree_mechanical_too_cold) AS one_degree_mechanical_too_cold,
+        SUM(d.one_degree_ideal_too_cold) AS one_degree_ideal_too_cold,
+        SUM(d.one_degree_partial_too_cold) AS one_degree_partial_too_cold,
+        SUM(d.two_degree_mechanical_too_cold) AS two_degree_mechanical_too_cold,
+        SUM(d.two_degree_ideal_too_cold) AS two_degree_ideal_too_cold,
+        SUM(d.two_degree_partial_too_cold) AS two_degree_partial_too_cold
+    FROM d
+    GROUP BY
+        d.metadata_id,
+        d.bldg_id,
+        d.in_resstock_county_id,
+        d.day_index
+
+    UNION ALL
+
+    SELECT
+        d.metadata_id,
+        d.bldg_id,
+        d.in_resstock_county_id,
+        d.month_index AS timestep,
+        'monthly' AS timestep_resolution,
+        SUM(d.point_five_degree_mechanical_unmet) AS point_five_degree_mechanical_unmet,
+        SUM(d.point_five_degree_ideal_unmet) AS point_five_degree_ideal_unmet,
+        SUM(d.point_five_degree_partial_unmet) AS point_five_degree_partial_unmet,
+        SUM(d.one_degree_mechanical_unmet) AS one_degree_mechanical_unmet,
+        SUM(d.one_degree_ideal_unmet) AS one_degree_ideal_unmet,
+        SUM(d.one_degree_partial_unmet) AS one_degree_partial_unmet,
+        SUM(d.two_degree_mechanical_unmet) AS two_degree_mechanical_unmet,
+        SUM(d.two_degree_ideal_unmet) AS two_degree_ideal_unmet,
+        SUM(d.two_degree_partial_unmet) AS two_degree_partial_unmet,
+        SUM(d.point_five_degree_mechanical_too_hot) AS point_five_degree_mechanical_too_hot,
+        SUM(d.point_five_degree_ideal_too_hot) AS point_five_degree_ideal_too_hot,
+        SUM(d.point_five_degree_partial_too_hot) AS point_five_degree_partial_too_hot,
+        SUM(d.one_degree_mechanical_too_hot) AS one_degree_mechanical_too_hot,
+        SUM(d.one_degree_ideal_too_hot) AS one_degree_ideal_too_hot,
+        SUM(d.one_degree_partial_too_hot) AS one_degree_partial_too_hot,
+        SUM(d.two_degree_mechanical_too_hot) AS two_degree_mechanical_too_hot,
+        SUM(d.two_degree_ideal_too_hot) AS two_degree_ideal_too_hot,
+        SUM(d.two_degree_partial_too_hot) AS two_degree_partial_too_hot,
+        SUM(d.point_five_degree_mechanical_too_cold) AS point_five_degree_mechanical_too_cold,
+        SUM(d.point_five_degree_ideal_too_cold) AS point_five_degree_ideal_too_cold,
+        SUM(d.point_five_degree_partial_too_cold) AS point_five_degree_partial_too_cold,
+        SUM(d.one_degree_mechanical_too_cold) AS one_degree_mechanical_too_cold,
+        SUM(d.one_degree_ideal_too_cold) AS one_degree_ideal_too_cold,
+        SUM(d.one_degree_partial_too_cold) AS one_degree_partial_too_cold,
+        SUM(d.two_degree_mechanical_too_cold) AS two_degree_mechanical_too_cold,
+        SUM(d.two_degree_ideal_too_cold) AS two_degree_ideal_too_cold,
+        SUM(d.two_degree_partial_too_cold) AS two_degree_partial_too_cold
+    FROM d
+    GROUP BY
+        d.metadata_id,
+        d.bldg_id,
+        d.in_resstock_county_id,
+        d.month_index
+
+    UNION ALL
+
+    SELECT
+        d.metadata_id,
+        d.bldg_id,
+        d.in_resstock_county_id,
+        MIN(d.month_index) AS timestep,
+        'yearly' AS timestep_resolution,
+        SUM(d.point_five_degree_mechanical_unmet) AS point_five_degree_mechanical_unmet,
+        SUM(d.point_five_degree_ideal_unmet) AS point_five_degree_ideal_unmet,
+        SUM(d.point_five_degree_partial_unmet) AS point_five_degree_partial_unmet,
+        SUM(d.one_degree_mechanical_unmet) AS one_degree_mechanical_unmet,
+        SUM(d.one_degree_ideal_unmet) AS one_degree_ideal_unmet,
+        SUM(d.one_degree_partial_unmet) AS one_degree_partial_unmet,
+        SUM(d.two_degree_mechanical_unmet) AS two_degree_mechanical_unmet,
+        SUM(d.two_degree_ideal_unmet) AS two_degree_ideal_unmet,
+        SUM(d.two_degree_partial_unmet) AS two_degree_partial_unmet,
+        SUM(d.point_five_degree_mechanical_too_hot) AS point_five_degree_mechanical_too_hot,
+        SUM(d.point_five_degree_ideal_too_hot) AS point_five_degree_ideal_too_hot,
+        SUM(d.point_five_degree_partial_too_hot) AS point_five_degree_partial_too_hot,
+        SUM(d.one_degree_mechanical_too_hot) AS one_degree_mechanical_too_hot,
+        SUM(d.one_degree_ideal_too_hot) AS one_degree_ideal_too_hot,
+        SUM(d.one_degree_partial_too_hot) AS one_degree_partial_too_hot,
+        SUM(d.two_degree_mechanical_too_hot) AS two_degree_mechanical_too_hot,
+        SUM(d.two_degree_ideal_too_hot) AS two_degree_ideal_too_hot,
+        SUM(d.two_degree_partial_too_hot) AS two_degree_partial_too_hot,
+        SUM(d.point_five_degree_mechanical_too_cold) AS point_five_degree_mechanical_too_cold,
+        SUM(d.point_five_degree_ideal_too_cold) AS point_five_degree_ideal_too_cold,
+        SUM(d.point_five_degree_partial_too_cold) AS point_five_degree_partial_too_cold,
+        SUM(d.one_degree_mechanical_too_cold) AS one_degree_mechanical_too_cold,
+        SUM(d.one_degree_ideal_too_cold) AS one_degree_ideal_too_cold,
+        SUM(d.one_degree_partial_too_cold) AS one_degree_partial_too_cold,
+        SUM(d.two_degree_mechanical_too_cold) AS two_degree_mechanical_too_cold,
+        SUM(d.two_degree_ideal_too_cold) AS two_degree_ideal_too_cold,
+        SUM(d.two_degree_partial_too_cold) AS two_degree_partial_too_cold
+    FROM d
+    GROUP BY
+        d.metadata_id,
+        d.bldg_id,
+        d.in_resstock_county_id
+;
+
+CREATE VIEW IF NOT EXISTS dynamic_lstm_train_data_hourly_summary AS
+    WITH m AS (
+        SELECT
+            e.metadata_id,
+            t.*
+        FROM dynamic_lstm_train_data t
+        LEFT JOIN energyplus_simulation e ON e.id = t.simulation_id
+        WHERE t.simulation_id IN (SELECT id FROM energyplus_simulation WHERE reference = 0)
+    ), i AS (
+        SELECT
+            e.metadata_id,
+            t.*
+        FROM dynamic_lstm_train_data t
+        LEFT JOIN energyplus_simulation e ON e.id = t.simulation_id
+        WHERE t.simulation_id IN (SELECT id FROM energyplus_simulation WHERE reference = 1)
+    ), p AS (
+        SELECT
+            e.metadata_id,
+            t.*
+        FROM dynamic_lstm_train_data t
+        LEFT JOIN energyplus_simulation e ON e.id = t.simulation_id
+        WHERE t.simulation_id IN (SELECT id FROM energyplus_simulation WHERE reference = 2)
+    )
+
+    SELECT
+        m.metadata_id,
+        e.bldg_id,
+        e.in_resstock_county_id,
+        m.timestep,
+        CAST((m.timestep - 1)/24 AS INTEGER) AS day_index,
+        CAST((m.timestep - 1)/(24*30) AS INTEGER) AS month_index,
+        s.setpoint,
+        m.average_indoor_air_temperature AS mechanical_temperature,
+        i.average_indoor_air_temperature AS ideal_temperature,
+        p.average_indoor_air_temperature AS partial_temperature,
+        m.heating_load AS mechanical_heating_load,
+        i.heating_load AS ideal_heating_load,
+        p.heating_load AS partial_heating_load,
+        m.cooling_load AS mechanical_cooling_load,
+        i.cooling_load AS ideal_cooling_load,
+        p.cooling_load AS partial_cooling_load,
+        m.average_indoor_air_temperature - s.setpoint AS mechanical_setpoint_difference,
+        i.average_indoor_air_temperature - s.setpoint AS ideal_setpoint_difference,
+        p.average_indoor_air_temperature - s.setpoint AS partial_setpoint_difference,
+        i.average_indoor_air_temperature - m.average_indoor_air_temperature AS ideal_and_mechanical_temperature_difference,
+        p.average_indoor_air_temperature - i.average_indoor_air_temperature AS partial_and_ideal_temperature_difference,
+        i.heating_load - m.heating_load AS ideal_and_mechanical_heating_load_difference,
+        p.heating_load - i.heating_load AS partial_and_ideal_heating_load_difference,
+        i.cooling_load - m.cooling_load AS ideal_and_mechanical_cooling_load_difference,
+        p.cooling_load - i.cooling_load AS partial_and_ideal_cooling_load_difference,
+        (m.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint AS mechanical_setpoint_percent_difference,
+        (i.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint AS ideal_setpoint_percent_difference,
+        (p.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint AS partial_setpoint_percent_difference,
+        (i.average_indoor_air_temperature - m.average_indoor_air_temperature)*100.0/m.average_indoor_air_temperature AS ideal_and_mechanical_temperature_percent_difference,
+        (p.average_indoor_air_temperature - i.average_indoor_air_temperature)*100.0/i.average_indoor_air_temperature AS partial_and_ideal_temperature_percent_difference,
+        (i.heating_load - m.heating_load)*100.0/m.heating_load AS ideal_and_mechanical_heating_load_percent_difference,
+        (p.heating_load - i.heating_load)*100.0/i.heating_load AS partial_and_ideal_heating_load_percent_difference,
+        (i.cooling_load - m.cooling_load)*100.0/m.cooling_load AS ideal_and_mechanical_cooling_load_percent_difference,
+        (p.cooling_load - i.cooling_load)*100.0/i.cooling_load AS partial_and_ideal_cooling_load_percent_difference,
+        ABS(m.average_indoor_air_temperature - s.setpoint) AS mechanical_setpoint_absolute_difference,
+        ABS(i.average_indoor_air_temperature - s.setpoint) AS ideal_setpoint_absolute_difference,
+        ABS(p.average_indoor_air_temperature - s.setpoint) AS partial_setpoint_absolute_difference,
+        ABS(i.average_indoor_air_temperature - m.average_indoor_air_temperature) AS ideal_and_mechanical_temperature_absolute_difference,
+        ABS(p.average_indoor_air_temperature - i.average_indoor_air_temperature) AS partial_and_ideal_temperature_absolute_difference,
+        ABS(i.heating_load - m.heating_load) AS ideal_and_mechanical_heating_load_absolute_difference,
+        ABS(p.heating_load - i.heating_load) AS partial_and_ideal_heating_load_absolute_difference,
+        ABS(i.cooling_load - m.cooling_load) AS ideal_and_mechanical_cooling_load_absolute_difference,
+        ABS(p.cooling_load - i.cooling_load) AS partial_and_ideal_cooling_load_absolute_difference,
+        ABS((m.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint) AS mechanical_setpoint_absolute_percent_difference,
+        ABS((i.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint) AS ideal_setpoint_absolute_percent_difference,
+        ABS((p.average_indoor_air_temperature - s.setpoint)*100.0/s.setpoint) AS partial_setpoint_absolute_percent_difference,
+        ABS((i.average_indoor_air_temperature - m.average_indoor_air_temperature)*100.0/m.average_indoor_air_temperature) AS ideal_and_mechanical_temperature_absolute_percent_difference,
+        ABS((p.average_indoor_air_temperature - i.average_indoor_air_temperature)*100.0/i.average_indoor_air_temperature) AS partial_and_ideal_temperature_absolute_percent_difference,
+        ABS((i.heating_load - m.heating_load)*100.0/m.heating_load) AS ideal_and_mechanical_heating_load_absolute_percent_difference,
+        ABS((p.heating_load - i.heating_load)*100.0/i.heating_load) AS partial_and_ideal_heating_load_absolute_percent_difference,
+        ABS((i.cooling_load - m.cooling_load)*100.0/m.cooling_load) AS ideal_and_mechanical_cooling_load_absolute_percent_difference,
+        ABS((p.cooling_load - i.cooling_load)*100.0/i.cooling_load) AS partial_and_ideal_cooling_load_absolute_percent_difference
+    FROM m
+    LEFT JOIN i ON i.metadata_id = m.metadata_id AND i.timestep = m.timestep
+    LEFT JOIN p ON p.metadata_id = m.metadata_id AND p.timestep = m.timestep
+    LEFT JOIN static_lstm_train_data s ON s.metadata_id = m.metadata_id AND s.timestep = m.timestep
+    LEFT JOIN metadata e ON e.id = m.metadata_id
+;
