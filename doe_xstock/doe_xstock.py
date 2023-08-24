@@ -20,7 +20,7 @@ from doe_xstock.database import SQLiteDatabase
 from doe_xstock.exploration import MetadataClustering
 from doe_xstock.lstm import TrainData, EnergyPlusSimulationError
 from doe_xstock.simulate import OpenStudioModelEditor, Simulator
-from doe_xstock.utilities import read_json, write_data, write_json
+from doe_xstock.utilities import read_json, write_data
 
 logging_config = read_json(os.path.join(os.path.dirname(__file__),'misc/logging_config.json'))
 logging.config.dictConfig(logging_config)
