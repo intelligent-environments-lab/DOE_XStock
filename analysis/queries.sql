@@ -1,3 +1,5 @@
+-- SELECT osm FROM model WHERE metadata_id = 494;
+
 -- PRAGMA foreign_keys = ON;
 -- DELETE FROM energyplus_simulation;
 -- DELETE FROM energyplus_simulation_error;
