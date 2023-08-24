@@ -23,10 +23,10 @@ class TrainData:
             timesteps_per_hour=None, iterations=None, max_workers=None, seed=None,
         ):
         self.idd_filepath = idd_filepath
-        self.osm = osm
-        self.epw = epw
         self.output_directory = output_directory
         self.simulation_id = simulation_id
+        self.osm = osm
+        self.epw = epw
         self.__setpoints_filepath = None
         self.__schedules_filepath = None
         self.schedules = schedules
@@ -48,7 +48,6 @@ class TrainData:
         self.__design_loads_data = {}
         self.__zone_metadata = {}
         self.__partial_loads_data = None
-        self.__errors = []
         self.__design_simulation_references = {
             'mechanical': 0,
             'ideal': 1
@@ -97,10 +96,6 @@ class TrainData:
     @property
     def max_workers(self):
         return self.__max_workers
-    
-    @property
-    def errors(self):
-        return self.__errors
 
     @property
     def seed(self):
@@ -116,8 +111,9 @@ class TrainData:
 
     @osm.setter
     def osm(self, osm):
-        self.__osm = osm
-
+        write_data(osm, os.path.join(self.output_directory, f'{self.simulation_id}.osm'))
+        self.__osm = self.__validate_osm(osm)
+        
     @epw.setter
     def epw(self, epw):
         self.__epw = epw
@@ -271,11 +267,12 @@ class TrainData:
         air_system_cooling = data[data['name']=='Zone Air System Sensible Cooling Rate']['value'].iloc[0]
         air_system_heating = data[data['name']=='Zone Air System Sensible Heating Rate']['value'].iloc[0]
 
-        try:
-            assert air_system_cooling == 0 and air_system_heating == 0
-        except AssertionError:
-            LOGGER.warning(f'simulation_id-{simulator.simulation_id}: Non-zero Zone Air System Sensible Cooling Rate'\
-                f' and/or Zone Air System Sensible Heating Rate: ({air_system_cooling, air_system_heating})')
+        if air_system_cooling != 0 or air_system_heating != 0:
+            message = f'Non-zero Zone Air System Sensible Cooling Rate and/or'\
+                f' Heating Rate: ({air_system_cooling, air_system_heating})'
+            raise EnergyPlusSimulationError(error_id=4, message=message)
+        else:
+            pass
                   
         # create zone conditioning table
         zones = self.__zone_metadata[self.ideal_loads_air_system]
@@ -442,8 +439,8 @@ class TrainData:
         return schedule
     
     def set_design_loads_data(self, mode, patterns=None):
-        LOGGER.debug(f'Simulating HVAC loads for ideal loads = {self.ideal_loads_air_system}.')
         self.ideal_loads_air_system = bool(self.__design_simulation_references[mode])
+        LOGGER.debug(f'Simulating HVAC loads for ideal loads = {self.ideal_loads_air_system}.')
         simulation_id = f'{self.simulation_id}-{self.__design_simulation_references[mode]}-{mode}'
         output_directory = os.path.join(self.output_directory, simulation_id)
         os.makedirs(output_directory, exist_ok=True)
@@ -553,33 +550,48 @@ class TrainData:
         return zones
 
     def set_simulator(self, simulation_id, output_directory):
+        # set osm editor
         osm_editor = OpenStudioModelEditor(self.osm)
-
+        
         if self.ideal_loads_air_system:
             osm_editor.use_ideal_loads_air_system()
         else:
             pass
-
+        
+        # set idf
         idf = osm_editor.forward_translate()
-
-        try:
-            assert 'OS:AirLoopHVAC:UnitarySystem' in self.osm, 'OS:AirLoopHVAC:UnitarySystem not found'
-            assert 'ZoneControl:Thermostat,' in idf, 'ZoneControl:Thermostat not found'
-            assert 'ThermostatSetpoint:DualSetpoint,' in idf, 'ThermostatSetpoint:DualSetpoint not found'
-        except:
-            write_data(idf, 'test_idf.idf')
-            self.__errors.append(1)
-            raise EnergyPlusSimulationError
-
+        idf = self.__validate_idf(idf)
         self.__simulator[self.ideal_loads_air_system] = Simulator(
             self.idd_filepath, 
             idf, 
-            self.epw, 
+            self.epw,
             simulation_id=simulation_id, 
             output_directory=output_directory
         )
         self.__preprocess_idf()
-       
+
+    def __validate_idf(self, idf):
+        if not 'ZoneControl:Thermostat,' in idf:
+            write_data(idf, 'test.idf')
+            raise EnergyPlusSimulationError(error_id=3, message='ZoneControl:Thermostat not found in idf.')
+        
+        else:
+            pass
+            
+        return idf
+
+    def __validate_osm(self, osm):
+        if not 'OS:AirLoopHVAC:UnitarySystem' in osm:
+            raise EnergyPlusSimulationError(error_id=1, message='OS:AirLoopHVAC:UnitarySystem not found in osm.')
+        
+        elif not 'OS:ThermostatSetpoint:DualSetpoint' in osm:
+            raise EnergyPlusSimulationError(error_id=2, message='OS:ThermostatSetpoint:DualSetpoint not found in osm.')
+        
+        else:
+            pass
+
+        return osm
+            
     def __preprocess_idf(self):
         # idf object
         idf = self.__simulator[self.ideal_loads_air_system].get_idf_object()
@@ -662,6 +674,8 @@ class Error(Exception):
 class EnergyPlusSimulationError(Error):
     __MESSAGE = 'Simulation errors were found.'
   
-    def __init__(self, message=None):
-        super().__init__(self.__MESSAGE if message is None else message)
+    def __init__(self, error_id, message=None):
+        self.error_id = error_id
+        self.message = self.__MESSAGE if message is None else message
+        super().__init__(message)
     
