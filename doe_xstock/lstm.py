@@ -572,7 +572,6 @@ class TrainData:
 
     def __validate_idf(self, idf):
         if not 'ZoneControl:Thermostat,' in idf:
-            write_data(idf, 'test.idf')
             raise EnergyPlusSimulationError(error_id=3, message='ZoneControl:Thermostat not found in idf.')
         
         else:
