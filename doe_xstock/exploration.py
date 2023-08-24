@@ -475,10 +475,17 @@ class MetadataClustering:
         """
         where_clause += '' if self.filters is None else ' AND ' + ' AND '.join([f'{k} IN {tuple(v)}' for k,v in self.filters.items()])
 
-        # only select buildings that have OS:AirLoopHVAC:UnitarySystem object in their OSM to avoid simulation errors where
-        # there is no space cooling/heating load.
-        where_clause += " AND id IN (SELECT metadata_id FROM model WHERE osm REGEXP 'OS:AirLoopHVAC:UnitarySystem')"
-
+        # only select buildings that have certain objects in their OSM to avoid simulation errors where
+        where_clause += """ AND id IN (
+            SELECT 
+                metadata_id 
+            FROM model 
+            WHERE 
+                osm REGEXP 'OS:AirLoopHVAC:UnitarySystem'
+                AND osm REGEXP 'OS:ThermostatSetpoint:DualSetpoint'
+        )
+        """
+        
         # only select buildings with one thermal zone
         where_clause += " AND id IN (SELECT metadata_id FROM thermal_zone_count WHERE value = 1)"
         
