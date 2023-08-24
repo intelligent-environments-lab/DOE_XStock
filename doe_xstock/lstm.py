@@ -286,7 +286,6 @@ class TrainData:
         # get simulation summary
         query_filepath = os.path.join(os.path.dirname(__file__), 'misc/queries/set_lstm_train_data.sql')
         data = simulator.get_database().query_table_from_file(query_filepath, replace={'<conditioned_zone_names>': conditioned_zone_names})
-        print(simulator.simulation_id, data)
         data = {**data.to_dict('list'), **self.setpoints}
         _ = data.pop('index', None)
         
@@ -352,6 +351,7 @@ class TrainData:
 
         # generate stochastic thermal load
         zone_names = set(self.__design_loads_data[int(self.ideal_loads_air_system)]['load']['zone_name'])
+        zone_names = sorted(list(zone_names))
         timesteps = max(self.__design_loads_data[int(self.ideal_loads_air_system)]['load']['timestep'])
         loads = ['cooling_load', 'heating_load']
         
