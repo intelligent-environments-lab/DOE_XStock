@@ -1,5 +1,5 @@
 SELECT
-    m.in_resstock_county_id,
+    m.in_resstock_county_id AS resstock_county_id,
     m.bldg_id AS resstock_building_id,
     b.name AS ecobee_building_id,
     i.reference AS simulation_reference,
