@@ -61,9 +61,9 @@ WITH u AS (
         SUM(CASE WHEN d.Name = 'Zone Air Relative Humidity' THEN Value END) AS "Indoor Relative Humidity (%)",
         SUM(CASE WHEN d.Name IN ('Zone Lights Electricity Rate', 'Zone Electric Equipment Electricity Rate') THEN Value/(1000.0) END) AS "Equipment Electric Power (kWh)",
         SUM(CASE WHEN d.Name = 'Water Use Equipment Heating Rate' THEN ABS(Value)/(1000.0) END) AS "DHW Heating (kWh)",
-        SUM(CASE WHEN u.label = 'cooling_load' THEN Value/1000.0 END) AS cooling_load,
-        SUM(CASE WHEN u.label = 'heating_load' THEN Value/1000.0 END) AS heating_load,
-        SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS "Occupancy",
+        SUM(CASE WHEN u.label = 'cooling_load' THEN Value/1000.0 END) AS "Cooling Load (kWh)",
+        SUM(CASE WHEN u.label = 'heating_load' THEN Value/1000.0 END) AS "Heating Load (kWh)",
+        SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS "Occupant Count (people)",
         MAX(CASE WHEN d.Name = 'Zone Thermostat Cooling Setpoint Temperature' THEN Value END) AS "Temperature Set Point (C)"
     FROM u
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = u.ReportDataDictionaryIndex
@@ -93,7 +93,7 @@ SELECT
     COALESCE(p."Cooling Load (kWh)", 0.0) AS "Cooling Load (kWh)",
     COALESCE(p."Heating Load (kWh)", 0.0) AS "Heating Load (kWh)",
     NULL AS "Solar Generation (W/kW)",
-    p."Occupancy" AS "Occupant Count (people)",
+    p."Occupant Count (people)" AS "Occupant Count (people)",
     p."Temperature Set Point (C)",
     CASE 
         WHEN COALESCE(p."Cooling Load (kWh)", 0.0) 
