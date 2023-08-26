@@ -658,7 +658,7 @@ class TrainData:
     @staticmethod
     def get_train_data(database, metadata_id):
         query_filepath = os.path.join(os.path.dirname(__file__), 'misc/queries/get_lstm_train_data.sql')
-        data = database.query_table_from_file(query_filepath, replace={'<metadata_id>': metadata_id})
+        data = database.query_table_from_file(query_filepath, replace={'<metadata_id>': str(metadata_id)})
 
         return data
     
