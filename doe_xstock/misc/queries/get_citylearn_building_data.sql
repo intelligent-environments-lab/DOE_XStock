@@ -35,7 +35,7 @@ WITH u AS (
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
     WHERE 
         d.Name = 'Other Equipment Convective Heating Rate' AND
-        (d.KeyValue LIKE '%HEATING LOAD' OR d.KeyValue LIKE '%COOLING LOAD')
+        (d.KeyValue LIKE '%HEATING_LOAD' OR d.KeyValue LIKE '%COOLING_LOAD')
 
     UNION ALL
 
