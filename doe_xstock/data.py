@@ -164,7 +164,7 @@ class MeteostatWeather:
 
 class CityLearnData:
     @staticmethod
-    def get_building_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None):
+    def get_building_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, reference=None):
         database = CityLearnData.get_database(
             dataset_type, 
             weather_data, 
@@ -172,15 +172,25 @@ class CityLearnData:
             release, 
             bldg_id, 
             simulation_output_directory, 
-            simulation_id=simulation_id
+            simulation_id=simulation_id,
+            reference=reference,
         )
+        simulation_id = CityLearnData.__get_simulation_id(dataset_type, weather_data, year_of_publication, release, bldg_id)
         filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_building_data.sql')
         data = database.query_table_from_file(filepath)
+        setpoint_column_name = 'Temperature Set Point (C)'
+
+        if data[setpoint_column_name].isnull().sum() == data.shape[0]:
+            setpoint_filepath = os.path.join(simulation_output_directory, simulation_id, 'setpoint.csv')
+            setpoints = pd.read_csv(setpoint_filepath)
+            data[setpoint_column_name] = setpoints['setpoint'].tolist()
+        else:
+            pass
 
         return data
     
     @staticmethod
-    def get_weather_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, shifts=None, accuracy=None, random_seed=None):
+    def get_weather_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, shifts=None, accuracy=None, random_seed=None, reference=None):
         database = CityLearnData.get_database(
             dataset_type, 
             weather_data, 
@@ -188,7 +198,8 @@ class CityLearnData:
             release, 
             bldg_id, 
             simulation_output_directory, 
-            simulation_id=simulation_id
+            simulation_id=simulation_id,
+            reference=reference,
         )
         filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_weather_data.sql')
         data = database.query_table_from_file(filepath)
@@ -235,11 +246,12 @@ class CityLearnData:
         return data
     
     @staticmethod
-    def get_database(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None):
-        simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'\
+    def get_database(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, reference=None):
+        reference = '2-partial' if reference is None else reference
+        simulation_id = CityLearnData.__get_simulation_id(dataset_type, weather_data, year_of_publication, release, bldg_id)\
             if simulation_id is None else simulation_id
         output_directory = os.path.join(simulation_output_directory, f'{simulation_id}')
-        simulation_reference_id = f'{simulation_id}-0-partial'
+        simulation_reference_id = f'{simulation_id}-{reference}'
         filepath = os.path.join(
             output_directory,
             simulation_reference_id, 
@@ -248,3 +260,9 @@ class CityLearnData:
         assert os.path.isfile(filepath), f'database with filepath {filepath} does not exist.'
         
         return SQLiteDatabase(filepath)
+    
+    @staticmethod
+    def __get_simulation_id(dataset_type, weather_data, year_of_publication, release, bldg_id):
+        simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'
+
+        return simulation_id

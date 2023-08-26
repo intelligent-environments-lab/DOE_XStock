@@ -31,18 +31,13 @@ WITH u AS (
     SELECT
         r.TimeIndex,
         r.ReportDataDictionaryIndex,
-        'thermal_load' AS label,
-        r.Value
+        CASE WHEN r.Value > 0 THEN 'heating_load' ELSE 'cooling_load' END AS label,
+        ABS(r.Value) AS Value
     FROM ReportData r
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = r.ReportDataDictionaryIndex
-    LEFT JOIN Zones z ON z.ZoneName = d.KeyValue
     WHERE 
-        d.Name IN (
-            'Zone Air System Sensible Cooling Rate', 
-            'Zone Air System Sensible Heating Rate', 
-            'Zone Thermostat Cooling Setpoint Temperature'
-        )
-        AND d.KeyValue IN (<conditioned_zone_names>)
+        d.Name = 'Other Equipment Convective Heating Rate' AND
+        (d.KeyValue LIKE '%HEATING_LOAD' OR d.KeyValue LIKE '%COOLING_LOAD')
 
     UNION ALL
 
@@ -64,9 +59,8 @@ WITH u AS (
         MAX(CASE WHEN d.Name = 'Site Outdoor Air Drybulb Temperature' THEN Value END) AS outdoor_air_temperature,
         SUM(CASE WHEN d.Name = 'Zone Air Temperature' THEN Value END) AS average_indoor_air_temperature,
         SUM(CASE WHEN d.Name = 'Zone People Occupant Count' THEN Value END) AS occupant_count,
-        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Cooling Rate' THEN ABS(Value)/(1000.0) END) AS cooling_load,
-        SUM(CASE WHEN d.Name = 'Zone Air System Sensible Heating Rate' THEN ABS(Value)/(1000.0) END) AS heating_load,
-        MIN(CASE WHEN d.Name = 'Zone Thermostat Cooling Setpoint Temperature' THEN Value END) AS setpoint
+        SUM(CASE WHEN u.label = 'cooling_load' THEN Value/1000.0 END) AS cooling_load,
+        SUM(CASE WHEN u.label = 'heating_load' THEN Value/1000.0 END) AS heating_load
     FROM u
     LEFT JOIN ReportDataDictionary d ON d.ReportDataDictionaryIndex = u.ReportDataDictionaryIndex
     GROUP BY u.TimeIndex
@@ -95,8 +89,7 @@ SELECT
     p.average_indoor_air_temperature,
     p.occupant_count,
     COALESCE(p.cooling_load, 0) AS cooling_load,
-    COALESCE(p.heating_load, 0) AS heating_load,
-    p.setpoint
+    COALESCE(p.heating_load, 0) AS heating_load
 FROM p
 LEFT JOIN Time t ON t.TimeIndex = p.TimeIndex
 WHERE t.DayType NOT IN ('SummerDesignDay', 'WinterDesignDay')

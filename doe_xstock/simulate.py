@@ -74,9 +74,8 @@ class OpenStudioModelEditor:
 
         # add ideal load system
         for zone in osm.getThermalZones():
-            # check if zone has thermostat
-                
-            zone.setUseIdealAirLoads(True)
+            has_thermostat = zone.thermostat().is_initialized()
+            zone.setUseIdealAirLoads(has_thermostat)
             
         osm = str(osm)
         self.osm = osm
