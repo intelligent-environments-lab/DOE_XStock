@@ -10,7 +10,7 @@ with open('requirements.txt', 'r') as fh:
 
 setuptools.setup(
     name='doe_xstock',
-    version='0.0.1',
+    version='0.0.2',
     author='Kingsley Nweye',
     author_email='etonwana@yahoo.com',
     description='Manage DOE\'s End Use Load Profiles for the U.S. Building Stock.',
