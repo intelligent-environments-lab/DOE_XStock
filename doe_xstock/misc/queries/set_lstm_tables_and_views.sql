@@ -1,3 +1,4 @@
+PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS energyplus_simulation (
     id INTEGER NOT NULL,
     metadata_id INTEGER NOT NULL,

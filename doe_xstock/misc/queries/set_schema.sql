@@ -1,4 +1,12 @@
 -- tables
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS constant (
+    ashrae_maximum_unmet_hour_proportion REAL NOT NULL DEFAULT (300.0/8760.0)
+);
+INSERT OR IGNORE INTO constant(ashrae_maximum_unmet_hour_proportion)
+VALUES (300.0/8760.0);
+
 CREATE TABLE IF NOT EXISTS dataset (
     id INTEGER PRIMARY KEY NOT NULL,
     dataset_type TEXT NOT NULL,
