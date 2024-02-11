@@ -222,7 +222,7 @@ class TrainData:
         self.__output_directory = output_directory
         os.makedirs(self.output_directory, exist_ok=True)
 
-    def run(self, ems_patterns=None):
+    def run(self, ems_patterns=None, partial_load_multiplier_minimum_value=None, partial_load_multiplier_maximum_value=None, partial_load_multiplier_probability=None):
         LOGGER.info('Started simulation run.')
         
         # run for design mechanical and ideal load
@@ -236,7 +236,13 @@ class TrainData:
         seeds = [None] + [i for i in range(self.iterations + 1)]
         partial_references = [i + self.__design_simulation_references['ideal'] + 1 for i, _ in enumerate(seeds)]
         simulators = [
-            self.__get_partial_load_simulator(r, seed=s) 
+            self.__get_partial_load_simulator(
+                r, 
+                seed=s,
+                multiplier_minimum_value=partial_load_multiplier_minimum_value, 
+                multiplier_maximum_value=partial_load_multiplier_maximum_value, 
+                multiplier_probability=partial_load_multiplier_probability,
+            ) 
             for r, s in zip(partial_references, seeds)
         ]
         simulation_ids = [s.simulation_id for s in simulators]
@@ -288,7 +294,7 @@ class TrainData:
         
         return simulator.simulation_id, data
 
-    def __get_partial_load_simulator(self, reference, seed=None):
+    def __get_partial_load_simulator(self, reference, seed=None, multiplier_minimum_value=None, multiplier_maximum_value=None, multiplier_probability=None):
         idf = self.__get_transformed_idf_for_partial_load_simulation()
         simulation_id = f'{self.simulation_id}-{reference}-partial'
         output_directory = os.path.join(self.output_directory, simulation_id)
@@ -302,7 +308,13 @@ class TrainData:
         elif seed == 0:
             multiplier = [0.0]*size
         else:
-            multiplier = TrainData.get_multipliers(size, seed=seed)
+            multiplier = TrainData.get_multipliers(
+                size, 
+                seed=seed, 
+                minimum_value=multiplier_minimum_value, 
+                maximum_value=multiplier_maximum_value, 
+                probability=multiplier_probability
+            )
         
         multiplier = pd.DataFrame(multiplier, columns=['multiplier'])
         multiplier['timestep'] = multiplier.index + 1
