@@ -15,7 +15,7 @@ from doe_xstock.data import (
 )
 from doe_xstock.simulate import EnergyPlusSimulator, OpenStudioModelEditor
 
-class VersionMetadata:
+class EndUseLoadProfilesMetadata:
     def __init__(self, version: Version):
         self.version = version
 
@@ -39,7 +39,7 @@ class VersionMetadata:
     def spatial_tract(self) -> SpatialTract:
         return SpatialTract(version=self.version)
 
-class VersionBuilding:
+class EndUseLoadProfilesBuilding:
     def __init__(self, bldg_id: int, version: Version):
         self.bldg_id = bldg_id
         self.version = version
@@ -72,7 +72,7 @@ class EndUseLoadProfiles:
         self.weather_data = weather_data
         self.year_of_publication = year_of_publication
         self.release = release
-        self.metadata = VersionMetadata(self.version)
+        self.metadata = EndUseLoadProfilesMetadata(self.version)
 
     @property
     def dataset_type(self) -> str:
@@ -110,7 +110,7 @@ class EndUseLoadProfiles:
         self.__release = 1 if value is None else value
         self.version.release = self.release
 
-    def get_buildings(self, bldg_ids: List[int] = None, filters: Mapping[str, List[Any]] = None) -> List[VersionBuilding]:
+    def get_buildings(self, bldg_ids: List[int] = None, filters: Mapping[str, List[Any]] = None) -> List[EndUseLoadProfilesBuilding]:
         if bldg_ids is None:
             bldg_ids = self.metadata.metadata.get(filters=filters).index.tolist()
 
@@ -119,13 +119,13 @@ class EndUseLoadProfiles:
 
         return [self.get_building(b) for b in bldg_ids]
 
-    def get_building(self, bldg_id: int) -> VersionBuilding:
-        return VersionBuilding(bldg_id=bldg_id, version=self.version)
+    def get_building(self, bldg_id: int) -> EndUseLoadProfilesBuilding:
+        return EndUseLoadProfilesBuilding(bldg_id=bldg_id, version=self.version)
     
     def simulate_building(
             self, bldg_id: int, idd_filepath: Union[str, Path], simulation_id: str = None, output_directory: Union[Path, str] = None, 
             output_variables: List[str] = None, **kwargs
-    ) -> VersionBuilding:
+    ) -> EndUseLoadProfilesBuilding:
         building = self.get_building(bldg_id)
         osm = OpenStudioModelEditor(building.open_studio_model.get())
         idf = osm.forward_translate()
