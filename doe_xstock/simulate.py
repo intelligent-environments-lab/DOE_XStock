@@ -7,7 +7,7 @@ from eppy.modeleditor import IDF
 from eppy.runner.run_functions import runIDFs
 from openstudio import energyplus, osversion, openstudiomodelcore
 import pandas as pd
-from eulp_handler.database import SQLiteDatabase
+from doe_xstock.database import SQLiteDatabase
 
 class OpenStudioModelEditor:
     def __init__(self, osm: Union[Path, str]):
