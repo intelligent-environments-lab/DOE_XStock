@@ -163,7 +163,7 @@ class EnergyPlusSimulator:
 
     @output_directory.setter
     def output_directory(self, value: Union[Path, str]):
-        self.__output_directory = value if value is not None else 'simulation'
+        self.__output_directory = os.path.abspath(value) if value is not None else os.path.abspath('simulation')
 
     def get_result_database(self) -> SQLiteDatabase:
         filepath = os.path.join(self.output_directory, f'{self.simulation_id}.sql')
