@@ -300,11 +300,16 @@ class OpenStudioModel(BuildingData):
         return data
     
 class Weather(BuildingData):
-    def __init__(self, bldg_id: int = None, version: Version = None, cache: bool = None):
+    def __init__(self, bldg_id: int = None, county: str = None, version: Version = None, cache: bool = None):
         cache = True if cache is None else cache
         super().__init__(bldg_id=bldg_id, name='building_weather', version=version, cache=cache)
+        self.county = county
         self.energy_plus_weather_url = 'https://raw.githubusercontent.com/NREL/EnergyPlus/develop/weather/master.geojson'
         self.nasa_power_weather_url = 'https://power.larc.nasa.gov/api/temporal/hourly/point'
+
+    @property
+    def county(self) -> str:
+        return self.get_metadata()['in.county'] if self.__county is None else self.__county
 
     @property
     def cache_directory(self) -> str:
@@ -312,31 +317,35 @@ class Weather(BuildingData):
         os.makedirs(directory, exist_ok=True)
 
         return directory
+    
+    @county.setter
+    def county(self, value: str):
+        self.__county = value
 
     def get(self, year: int = None) -> Tuple[str, str]:
-        metadata = self.get_metadata()
+        county = self.county
         epw = None
         ddy = None
 
         if year is not None or self.version.weather_data.startswith('amy'):
             year = self.version.weather_data.replace('amy', '') if year is None else year
             year = int(year)
-            epw_cache_filepath = os.path.join(self.cache_directory, f'{metadata["in.county"].lower()}_amy{year}.epw')
+            epw_cache_filepath = os.path.join(self.cache_directory, f'{county.lower()}_amy{year}.epw')
             
             if os.path.isfile(epw_cache_filepath):
                 with open(epw_cache_filepath, 'r') as f:
                     epw = f.read()
             
             else:
-                epw = self.get_amy_weather(year)
+                epw = self.__get_amy_weather(year)
 
                 if self.cache:
                     with open(epw_cache_filepath, 'w') as f:
                         f.write(epw)
 
         elif self.version.weather_data.startswith('tmy3'):
-            epw_cache_filepath = os.path.join(self.cache_directory, f'{metadata["in.county"].lower()}_tmy3.epw')
-            ddy_cache_filepath = os.path.join(self.cache_directory, f'{metadata["in.county"].lower()}_tmy3.ddy')
+            epw_cache_filepath = os.path.join(self.cache_directory, f'{county.lower()}_tmy3.epw')
+            ddy_cache_filepath = os.path.join(self.cache_directory, f'{county.lower()}_tmy3.ddy')
 
             if os.path.isfile(epw_cache_filepath) and os.path.isfile(ddy_cache_filepath):
                 with open(epw_cache_filepath, 'r') as f:
@@ -346,7 +355,7 @@ class Weather(BuildingData):
                     ddy = f.read()
             
             else:
-                epw, ddy = self.get_tmy3_weather()
+                epw, ddy = self.__get_tmy3_weather()
 
                 if self.cache:
                     with open(epw_cache_filepath, 'w') as f:
@@ -357,7 +366,62 @@ class Weather(BuildingData):
 
         return epw, ddy
     
-    def get_amy_weather(self, year: int = None) -> str:
+    def convert_epw_to_csv(self, epw: str) -> pd.DataFrame:
+        columns = [
+            'Year',
+            'Month',
+            'Day',
+            'Hour',
+            'Minute',
+            'Data Source and Uncertainty Flags',
+            'Dry Bulb Temperature (C)',
+            'Dew Point Temperature (C)',
+            'Relative Humidity (%)',
+            'Atmospheric Station Pressure (Pa)',
+            'Extraterrestrial Horizontal Radiation (Wh/m2)',
+            'Extraterrestrial Direct Normal Radiation (Wh/m2)',
+            'Horizontal Infrared Radiation Intensity (Wh/m2)',
+            'Global Horizontal Radiation (Wh/m2)',
+            'Direct Normal Radiation (Wh/m2)',
+            'Diffuse Horizontal Radiation (Wh/m2)',
+            'Global Horizontal Illuminance (lux)',
+            'Direct Normal Illuminance (lux)',
+            'Diffuse Horizontal Illuminance (lux)',
+            'Zenith Luminance (Cd/m2)',
+            'Wind Direction (Degrees)',
+            'Wind Speed (m/s)',
+            'Total Sky Cover (Tenths of Coverage. 1 is 1/10 coverage. 10 is full coverage)',
+            'Opaque Sky Cover (Tenths of Coverage. 1 is 1/10 coverage. 10 is full coverage)',
+            'Visibility (km)',
+            'Ceiling Height (m)',
+            'Present Weather Observation',
+            'Present Weather Codes',
+            'Precipitable Water (mm)',
+            'Aerosol Optical Depth (thousandths)', 'Snow Depth (cm)',
+            'Days Since Last Snowfall (Days)', 'Albedo (unit less)',
+            'Liquid Precipitation Depth (mm)',
+            'Liquid Precipitation Quantity (hr)'
+        ]
+        data = pd.read_csv(io.StringIO(epw), skiprows=8, header=None, names=columns)
+        data.loc[data['Hour']==24, 'Hour'] = 0
+        data.loc[data['Minute']==60, 'Minute'] = 0
+        year = 2019 if data.shape[0] == 8760 else 2020
+        data['Timestamp'] = data.apply(lambda x: f'{year}-{x["Month"]}-{x["Day"]} {x["Hour"]}:{x["Minute"]}',axis=1)
+        data['Timestamp'] = pd.to_datetime(data['Timestamp'])
+        data = data.set_index('Timestamp', drop=True, verify_integrity=True)
+
+        return data
+
+    def get_version_csv(self) -> pd.DataFrame:
+        suffix = self.version.weather_data.strip('amy')
+        relative_path = os.path.join('weather', self.version.weather_data, f"{self.county}_{suffix}.csv")
+        csvd = CSVData(relative_path=relative_path, version=self.version, cache=self.cache)
+        data = csvd.get()
+        data['date_time'] = pd.to_datetime(data['date_time'])
+
+        return data
+    
+    def __get_amy_weather(self, year: int = None) -> str:
         metadata = self.get_metadata()
         params = {
             'start': f'{year}0101',
@@ -375,8 +439,8 @@ class Weather(BuildingData):
         
         return epw
     
-    def get_tmy3_weather(self) -> Tuple[str, str]:
-        weather_metadata = self.get_energyplus_weather_metadata()
+    def __get_tmy3_weather(self) -> Tuple[str, str]:
+        weather_metadata = self.__get_energyplus_weather_metadata()
         weather_metadata = weather_metadata[weather_metadata['provider']=='TMY3'].copy()
         metadata = self.get_metadata()
         weather_metadata = weather_metadata[
@@ -402,7 +466,7 @@ class Weather(BuildingData):
 
         return epw, ddy
     
-    def get_energyplus_weather_metadata(self) -> pd.DataFrame:
+    def __get_energyplus_weather_metadata(self) -> pd.DataFrame:
         response = requests.get(self.energy_plus_weather_url)
         response = response.json()
         features = response['features']
