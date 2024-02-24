@@ -44,8 +44,9 @@ def set_sb3_work_order(**kwargs):
     settings = get_settings()
     src_directory = settings['src_directory']
     work_order_directory = settings['work_order_directory']
-    schema_filepath = os.path.join(settings['schema_directory'], f'{kwargs["simulation_id"]}.json')
-    schema = read_json(os.path.join(settings['schema_directory'], f'{kwargs["simulation_id"]}.json'))
+    district_directory = os.path.join(settings['neighborhood_directory'], kwargs['district_name'])
+    schema_filepath = os.path.join(district_directory, 'schema.json')
+    schema = read_json(schema_filepath)
 
     work_order = []
 
@@ -71,7 +72,8 @@ def set_schema(**kwargs):
     district_directory = os.path.join(settings['neighborhood_directory'], kwargs['district_name'])
     schema = DataSet.get_schema('citylearn_challenge_2021')
     schema['simulation_id'] = kwargs['simulation_id']
-    schema['root_directory'] = district_directory
+    # schema['root_directory'] = district_directory
+    schema['root_directory'] = None
     schema['central_agent'] = settings['central_agent']
     season = kwargs['season']
     schema['season'] = season
@@ -192,7 +194,7 @@ def set_schema(**kwargs):
             }
         }
 
-    write_json(os.path.join(settings['schema_directory'], f'{kwargs["simulation_id"]}.json'), schema)
+    write_json(os.path.join(district_directory, f'schema.json'), schema)
 
 def size_equipment(**kwargs):
     settings = get_settings()
@@ -322,7 +324,7 @@ def get_settings():
     os.makedirs(settings['work_order_directory'], exist_ok=True)
     os.makedirs(settings['simulation_output_directory'], exist_ok=True)
     os.makedirs(settings['figures_directory'], exist_ok=True)
-    os.makedirs(settings['schema_directory'], exist_ok=True)
+    # os.makedirs(settings['schema_directory'], exist_ok=True)
     os.makedirs(settings['sizing_directory'], exist_ok=True)
     
     return settings
