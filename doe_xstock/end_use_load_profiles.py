@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+import shutil
 from typing import Any, List, Mapping, Union
+from pandas import DataFrame
 from doe_xstock.data import (
     DataDictionary, 
     EnumerationDictionary, 
@@ -13,7 +15,7 @@ from doe_xstock.data import (
     Version, 
     Weather
 )
-from doe_xstock.simulate import EnergyPlusSimulator, OpenStudioModelEditor
+from doe_xstock.simulate import EndUseLoadProfilesEnergyPlusSimulator
 
 class EndUseLoadProfilesMetadata:
     def __init__(self, version: Version):
@@ -43,7 +45,7 @@ class EndUseLoadProfilesBuilding:
     def __init__(self, bldg_id: int, version: Version):
         self.bldg_id = bldg_id
         self.version = version
-        self.simulator: EnergyPlusSimulator = None
+        self.simulator: EndUseLoadProfilesEnergyPlusSimulator = None
 
     @property
     def metadata(self) -> Mapping[str, Union[float, int, str]]:
@@ -123,104 +125,38 @@ class EndUseLoadProfiles:
         return EndUseLoadProfilesBuilding(bldg_id=bldg_id, version=self.version)
     
     def simulate_building(
-            self, bldg_id: int, idd_filepath: Union[str, Path], simulation_id: str = None, output_directory: Union[Path, str] = None, 
-            output_variables: List[str] = None, **kwargs
+            self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
+            output_directory: Union[Path, str] = None, output_variables: List[str] = None, model: Union[Path, str] = None, 
+            epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, **kwargs
     ) -> EndUseLoadProfilesBuilding:
         building = self.get_building(bldg_id)
-        osm = OpenStudioModelEditor(building.open_studio_model.get())
-        idf = osm.forward_translate()
-        epw, _ = building.weather.get()
-        schedules = building.schedules.get()
-
-        building.simulator = EnergyPlusSimulator(idd_filepath, idf, epw, simulation_id=simulation_id, output_directory=output_directory)
+        building.simulator = EndUseLoadProfilesEnergyPlusSimulator(
+            idd_filepath, 
+            building.open_studio_model.get() if model is None else model,
+            building.weather.get()[0] if epw is None else epw,
+            osm=True if model is None else osm,
+            ideal_loads=ideal_loads, 
+            edit_ems=edit_ems,
+            output_variables=output_variables, 
+            simulation_id=simulation_id, 
+            output_directory=output_directory
+        )
         os.makedirs(building.simulator.output_directory, exist_ok=True)
         schedules_filepath = os.path.join(building.simulator.output_directory, 'schedules.csv')
-        schedules.to_csv(schedules_filepath, index=False)
-
-        # ************************ MUST-DO EDITS TO IDF ************************
-        idf = building.simulator.get_idf_object()
-
-        # remove daylight savings definition
-        idf.idfobjects['RunPeriodControl:DaylightSavingTime'] = []
-
-        # set schedules filepath in model
-        for obj in idf.idfobjects['Schedule:File']:
-            if obj.Name.lower() in schedules.columns:
-                obj.File_Name = schedules_filepath
-            else:
-                continue
         
-        # set output variables
-        output_variables = self.get_default_simulation_output_variables() if output_variables is None else output_variables
-
-        for output_variable in output_variables:
-            obj = idf.newidfobject('Output:Variable')
-            obj.Variable_Name = output_variable
-            obj.Reporting_Frequency = 'Timestep' 
+        if schedules is None:
+            building.schedules.get().to_csv(schedules_filepath, index=False)
         
-        del schedules
+        elif isinstance(schedules, (Path, str)):
+            assert os.path.isfile(schedules)
+            _ = shutil.copy2(schedules, schedules_filepath)
 
-        building.simulator.idf = idf.idfstr()
-        # ********************************* END ********************************
+        elif isinstance(schedules, DataFrame):
+            schedules.to_csv(schedules_filepath, index=False)
 
+        else:
+            raise Exception('Unknown schedules format')
+        
         building.simulator.simulate(**kwargs)
 
         return building
-
-    def get_default_simulation_output_variables(self) -> List[str]:
-        default_output_variables = []
-
-        #  weather_variables
-        default_output_variables += [
-            'Site Diffuse Solar Radiation Rate per Area', 
-            'Site Direct Solar Radiation Rate per Area', 
-            'Site Outdoor Air Drybulb Temperature', 
-            'Site Outdoor Air Relative Humidity', 
-        ]
-
-        # electric_equipment_variables
-        default_output_variables += [
-            'Zone Electric Equipment Electricity Rate', 
-            'Zone Lights Electricity Rate', 
-        ]
-
-        # mechanical_hvac_variables
-        default_output_variables += [
-            'Air System Total Cooling Energy', 
-            'Air System Total Heating Energy', 
-            'Zone Air System Sensible Cooling Rate', 
-            'Zone Air System Sensible Heating Rate', 
-            'Zone Predicted Sensible Load to Setpoint Heat Transfer Rate',
-        ]
-
-        # ideal_load_variables
-        default_output_variables += [
-            'Zone Ideal Loads Zone Sensible Cooling Rate', 
-            'Zone Ideal Loads Zone Sensible Heating Rate', 
-        ]
-
-        # other_equipment_variables
-        default_output_variables += [
-            'Other Equipment Convective Heating Rate', 
-            'Other Equipment Convective Heating Energy'
-        ]
-
-        # dhw_variables
-        default_output_variables += [
-            'Water Use Equipment Heating Rate', 
-        ]
-
-        # ieq_variables
-        default_output_variables += [
-            'Zone Air Relative Humidity', 
-            'Zone Air Temperature', 
-            'Zone Thermostat Cooling Setpoint Temperature', 
-            'Zone Thermostat Heating Setpoint Temperature', 
-        ]
-
-        # occupancy_variables
-        default_output_variables += [
-            'Zone People Occupant Count', 
-        ]
-
-        return default_output_variables
