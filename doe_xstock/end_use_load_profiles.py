@@ -129,6 +129,7 @@ class EndUseLoadProfiles:
             output_directory: Union[Path, str] = None, output_variables: List[str] = None, model: Union[Path, str] = None, 
             epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, **kwargs
     ) -> EndUseLoadProfilesBuilding:
+        # get building object
         building = self.get_building(bldg_id)
         building.simulator = EndUseLoadProfilesEnergyPlusSimulator(
             idd_filepath, 
@@ -141,22 +142,25 @@ class EndUseLoadProfiles:
             simulation_id=simulation_id, 
             output_directory=output_directory
         )
-        os.makedirs(building.simulator.output_directory, exist_ok=True)
-        schedules_filepath = os.path.join(building.simulator.output_directory, 'schedules.csv')
+
+        # set schedules
+        os.makedirs(Path(building.simulator.schedules_filepath).parent, exist_ok=True)
         
         if schedules is None:
-            building.schedules.get().to_csv(schedules_filepath, index=False)
+            building.schedules.get().to_csv(building.simulator.schedules_filepath, index=False)
         
         elif isinstance(schedules, (Path, str)):
             assert os.path.isfile(schedules)
-            _ = shutil.copy2(schedules, schedules_filepath)
+            _ = shutil.copy2(schedules, building.simulator.schedules_filepath)
 
         elif isinstance(schedules, DataFrame):
-            schedules.to_csv(schedules_filepath, index=False)
+            schedules.to_csv(building.simulator.schedules_filepath, index=False)
+            del schedules
 
         else:
             raise Exception('Unknown schedules format')
         
+        # simulate
         building.simulator.simulate(**kwargs)
 
         return building

@@ -194,9 +194,9 @@ class EnergyPlusSimulator:
 
         for simulator in simulators:
             os.makedirs(simulator.output_directory, exist_ok=True)
+            simulator.__write_epw()
             idf = simulator.preprocess_idf_for_simulation()
             simulator.__write_idf(idf.idfstr())
-            simulator.__write_epw()
             kwargs = simulator.get_run_kwargs()
             runs.append([idf, kwargs])
         
@@ -205,9 +205,9 @@ class EnergyPlusSimulator:
     def simulate(self, **run_kwargs):
         os.makedirs(self.output_directory, exist_ok=True)
         run_kwargs = self.get_run_kwargs(**run_kwargs if run_kwargs is not None else {})
+        self.__write_epw()
         idf = self.preprocess_idf_for_simulation()
         self.__write_idf(idf.idfstr())
-        self.__write_epw()
         idf.run(**run_kwargs)
 
     def get_error(self) -> str:
@@ -251,13 +251,13 @@ class EnergyPlusSimulator:
             f.write(idf)
 
     def preprocess_idf_for_simulation(self) -> IDF:
-        return self.get_idf_object(self.epw)
+        return self.get_idf_object(self.epw_filepath)
 
-    def get_idf_object(self, epw: str = None) -> IDF:
-        return IDF(StringIO(self.idf), epw)
+    def get_idf_object(self, epw_filepath: Union[Path, str] = None) -> IDF:
+        return IDF(StringIO(self.idf), epw_filepath)
     
 class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
-    __DEFAULT_SCHEDULES_FILEPATH = 'schedules.csv'
+    __DEFAULT_SCHEDULES_FILENAME = 'schedules.csv'
 
     def __init__(
             self, idd_filepath: Union[Path, str], model: Union[Path, str], epw: Union[Path, str], schedules_filepath: Union[Path, str] = None, output_variables: List[str] = None, osm: bool = None, ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
@@ -284,7 +284,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
     
     @schedules_filepath.setter
     def schedules_filepath(self, value: Union[Path, str]):
-        self.__schedules_filepath = self.__DEFAULT_SCHEDULES_FILEPATH if value is None else value
+        self.__schedules_filepath = os.path.join(self.output_directory, self.__DEFAULT_SCHEDULES_FILENAME) if value is None else value
 
     @output_variables.setter
     def output_variables(self, value: List[str]):
@@ -434,14 +434,16 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         return len([re.findall(p, error) for p in patterns]) > 0
     
     def preprocess_idf_for_simulation(self) -> IDF:
-        idf = self.get_idf_object(self.epw)
+        idf = super().preprocess_idf_for_simulation()
 
         # remove daylight savings definition
         idf.idfobjects['RunPeriodControl:DaylightSavingTime'] = []
 
         # set schedules filepath in model
+        schedule_names = pd.read_csv(self.schedules_filepath).columns.tolist()
+
         for obj in idf.idfobjects['Schedule:File']:
-            if obj.File_Name == self.__DEFAULT_SCHEDULES_FILEPATH:
+            if obj.Name.lower() in schedule_names:
                 obj.File_Name = self.schedules_filepath
             
             else:
