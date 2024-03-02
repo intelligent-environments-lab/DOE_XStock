@@ -458,8 +458,8 @@ class Weather(BuildingData):
         else:
             weather_metadata = weather_metadata.iloc[0].to_dict()
             session = requests.Session()
-            retries = Retry(total=5,backoff_factor=1)
-            session.mount('http://',HTTPAdapter(max_retries=retries))
+            retries = Retry(total=5, backoff_factor=1)
+            session.mount('http://', HTTPAdapter(max_retries=retries))
             urllib3.disable_warnings()
             epw = session.get(weather_metadata['epw_url']).content.decode()
             ddy = session.get(weather_metadata['ddy_url']).content.decode(encoding='windows-1252')
