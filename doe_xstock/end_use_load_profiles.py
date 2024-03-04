@@ -113,7 +113,7 @@ class EndUseLoadProfiles:
         self.__release = 1 if value is None else value
         self.version.release = self.release
     
-    def simulate_buildings(buildings: List[EndUseLoadProfilesBuilding], max_workers: int = None) -> List[EndUseLoadProfilesBuilding]:
+    def simulate_buildings(self, buildings: List[EndUseLoadProfilesBuilding], max_workers: int = None) -> List[EndUseLoadProfilesBuilding]:
         EndUseLoadProfilesEnergyPlusSimulator.multi_simulate([b.simulator for b in buildings], max_workers=max_workers)
 
         return buildings
