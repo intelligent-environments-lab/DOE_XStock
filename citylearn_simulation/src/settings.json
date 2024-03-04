@@ -62,7 +62,7 @@
         }
     },
     "reward_function": {
-        "type": "citylearn.reward_function.AdditiveSolarPenaltyReward",
+        "type": "citylearn.reward_function.SolarPenaltyReward",
         "attributes": null
     }
 }
