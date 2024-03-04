@@ -12,7 +12,8 @@ from doe_xstock.data import (
     SpatialTract, 
     TimeSeries, 
     UpgradeDictionary, 
-    Version, 
+    Version,
+    VersionDatasetType,
     Weather
 )
 from doe_xstock.simulate import EndUseLoadProfilesEnergyPlusSimulator
@@ -111,35 +112,55 @@ class EndUseLoadProfiles:
     def release(self, value: int):
         self.__release = 1 if value is None else value
         self.version.release = self.release
+    
+    def simulate_buildings(buildings: List[EndUseLoadProfilesBuilding]) -> List[EndUseLoadProfilesBuilding]:
+        EndUseLoadProfilesEnergyPlusSimulator.multi_simulate(buildings)
 
-    def get_buildings(self, bldg_ids: List[int] = None, filters: Mapping[str, List[Any]] = None) -> List[EndUseLoadProfilesBuilding]:
-        if bldg_ids is None:
-            bldg_ids = self.metadata.metadata.get(filters=filters).index.tolist()
-
-        else:
-            pass 
-
-        return [self.get_building(b) for b in bldg_ids]
-
-    def get_building(self, bldg_id: int) -> EndUseLoadProfilesBuilding:
-        return EndUseLoadProfilesBuilding(bldg_id=bldg_id, version=self.version)
+        return buildings
     
     def simulate_building(
-            self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
-            output_directory: Union[Path, str] = None, output_variables: List[str] = None, model: Union[Path, str] = None, 
-            epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, **kwargs
+        self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
+        output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, model: Union[Path, str] = None, 
+        epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, **kwargs
+    ) -> EndUseLoadProfilesBuilding:
+        building = self.prepare_building_for_simulation(
+            bldg_id,
+            idd_filepath,
+            ideal_loads=ideal_loads,
+            edit_ems=edit_ems,
+            simulation_id=simulation_id,
+            output_directory=output_directory,
+            output_variables=output_variables,
+            output_meters=output_meters,
+            model=model,
+            epw=epw,
+            osm=osm,
+            schedules=schedules,
+            number_of_time_steps_per_hour=number_of_time_steps_per_hour,
+        )
+        building.simulator.simulate(**kwargs)
+
+        return building
+    
+    def prepare_building_for_simulation(
+        self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
+        output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, model: Union[Path, str] = None, 
+        epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None
     ) -> EndUseLoadProfilesBuilding:
         # get building object
         building = self.get_building(bldg_id)
         building.simulator = EndUseLoadProfilesEnergyPlusSimulator(
+            building.version,
             idd_filepath, 
             building.open_studio_model.get() if model is None else model,
             building.weather.get()[0] if epw is None else epw,
             osm=True if model is None else osm,
+            number_of_time_steps_per_hour=number_of_time_steps_per_hour,
             ideal_loads=ideal_loads, 
             edit_ems=edit_ems,
-            output_variables=output_variables, 
-            simulation_id=simulation_id, 
+            output_variables=output_variables,
+            output_meters=output_meters, 
+            simulation_id=simulation_id,
             output_directory=output_directory
         )
 
@@ -147,7 +168,11 @@ class EndUseLoadProfiles:
         os.makedirs(Path(building.simulator.schedules_filepath).parent, exist_ok=True)
         
         if schedules is None:
-            building.schedules.get().to_csv(building.simulator.schedules_filepath, index=False)
+            if building.version.dataset_type == VersionDatasetType.RESSTOCK.value:
+                building.schedules.get().to_csv(building.simulator.schedules_filepath, index=False)
+            
+            else:
+                pass
         
         elif isinstance(schedules, (Path, str)):
             assert os.path.isfile(schedules)
@@ -160,7 +185,20 @@ class EndUseLoadProfiles:
         else:
             raise Exception('Unknown schedules format')
         
-        # simulate
-        building.simulator.simulate(**kwargs)
+        # save osm model
+        with open(os.path.join(building.simulator.output_directory, f'{building.simulator.simulation_id}.osm'), 'w') as f:
+            f.write(building.open_studio_model.get())
 
         return building
+    
+    def get_buildings(self, bldg_ids: List[int] = None, filters: Mapping[str, List[Any]] = None) -> List[EndUseLoadProfilesBuilding]:
+        if bldg_ids is None:
+            bldg_ids = self.metadata.metadata.get(filters=filters).index.tolist()
+
+        else:
+            pass 
+
+        return [self.get_building(b) for b in bldg_ids]
+
+    def get_building(self, bldg_id: int) -> EndUseLoadProfilesBuilding:
+        return EndUseLoadProfilesBuilding(bldg_id=bldg_id, version=self.version)

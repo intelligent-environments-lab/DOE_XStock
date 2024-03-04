@@ -1,3 +1,4 @@
+from enum import Enum, unique
 import gzip
 import io
 import os
@@ -12,8 +13,18 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 
+@unique
+class VersionDatasetType(Enum):
+    RESSTOCK = 'resstock'
+    COMSTOCK = 'comstock'
+
+@unique
+class VersionWeatherData(Enum):
+    TMY3 = 'tmy3'
+    AMY2018 = 'amy2018'
+
 class Version:
-    def __init__(self, dataset_type: str = None, weather_data: str = None, year_of_publication: int = None, release: int = None, cache: bool = None):
+    def __init__(self, dataset_type: Union[str, VersionDatasetType] = None, weather_data: Union[str, VersionWeatherData] = None, year_of_publication: int = None, release: int = None, cache: bool = None):
         self.dataset_type = dataset_type
         self.weather_data = weather_data
         self.year_of_publication = year_of_publication
@@ -53,12 +64,16 @@ class Version:
         return self.__cache
     
     @dataset_type.setter
-    def dataset_type(self, value: str):
-        self.__dataset_type = 'resstock' if value is None else value
+    def dataset_type(self, value: Union[str, VersionDatasetType]):
+        self.__dataset_type = VersionDatasetType.RESSTOCK.value if value is None else (
+            value.value if isinstance(value, VersionDatasetType) else value
+        )
 
     @weather_data.setter
-    def weather_data(self, value: str):
-        self.__weather_data = 'tmy3' if value is None else value
+    def weather_data(self, value: Union[str, VersionWeatherData]):
+        self.__weather_data = VersionWeatherData.TMY3.value if value is None else (
+            value.value if isinstance(value, VersionWeatherData) else value
+        )
 
     @year_of_publication.setter
     def year_of_publication(self, value: int):
@@ -78,6 +93,9 @@ class Version:
         
         else:
             pass
+
+    def __str__(self) -> str:
+        return f'{self.dataset_type}_{self.year_of_publication}_{self.weather_data}_release_{self.release}'
 
 class Data:
     def __init__(self, name: str = None, relative_path: str = None, version: Version = None, cache: bool = None):
@@ -261,7 +279,7 @@ class Schedules(BuildingData, CSVData):
     @BuildingData.relative_path.getter
     def relative_path(self) -> str:
         metadata = self.get_metadata()
-        upgrade = metadata['upgrade']
+        upgrade = int(metadata['upgrade'])
         path = f'occupancy_schedules/bldg{self.bldg_id:07d}-up{upgrade:02d}.csv.gz'
 
         return path
@@ -273,8 +291,8 @@ class OpenStudioModel(BuildingData):
     @BuildingData.relative_path.getter
     def relative_path(self) -> str:
         metadata = self.get_metadata()
-        upgrade = metadata['upgrade']
-        path = f'building_energy_models/bldg{self.bldg_id:07d}-up{upgrade:02d}.osm.gz'
+        upgrade = int(metadata['upgrade'])
+        path = f'building_energy_models/bldg{int(self.bldg_id):07d}-up{upgrade:02d}.osm.gz'
 
         return path
 
@@ -292,7 +310,7 @@ class OpenStudioModel(BuildingData):
 
             if self.cache:
                 with open(self.cache_path, 'w') as f:
-                    f.write()
+                    f.write(data)
 
             else:
                 pass
@@ -443,9 +461,24 @@ class Weather(BuildingData):
         weather_metadata = self.__get_energyplus_weather_metadata()
         weather_metadata = weather_metadata[weather_metadata['provider']=='TMY3'].copy()
         metadata = self.get_metadata()
+
+        if self.version.dataset_type == VersionDatasetType.RESSTOCK.value:
+            longitude = metadata['in.weather_file_longitude']
+            latitude = metadata['in.weather_file_latitude']
+
+        else:
+            resstock_metadata = Metadata(Version(
+                VersionDatasetType.RESSTOCK.value,
+                self.version.weather_data,
+                self.version.year_of_publication,
+                self.version.release,
+            )).get({'in.resstock_county_id': [metadata['in.resstock_county_id']]})
+            longitude = resstock_metadata.iloc[0]['in.weather_file_longitude']
+            latitude = resstock_metadata.iloc[0]['in.weather_file_latitude']
+
         weather_metadata = weather_metadata[
-            (weather_metadata['longitude'].astype(str)==metadata['in.weather_file_longitude']) 
-            & (weather_metadata['latitude'].astype(str)==metadata['in.weather_file_latitude'])
+            (weather_metadata['longitude'].astype(str)==longitude) 
+            & (weather_metadata['latitude'].astype(str)==latitude)
         ].copy()
         
         if weather_metadata.shape[0] == 0:

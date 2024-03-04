@@ -1,12 +1,14 @@
 from io import StringIO
+from multiprocessing import cpu_count
 import os
 from pathlib import Path
 import re
 from typing import Mapping, List, Union
-from eppy.modeleditor import IDF
+from eppy.modeleditor import IDDNotSetError, IDF
 from eppy.runner.run_functions import EnergyPlusRunError, runIDFs
 from openstudio import energyplus, osversion, openstudiomodelcore
 import pandas as pd
+from doe_xstock.data import Version, VersionDatasetType
 from doe_xstock.database import SQLiteDatabase
 
 class OpenStudioModelEditor:
@@ -98,10 +100,11 @@ class OpenStudioModelEditor:
         return osm
 
 class EnergyPlusSimulator:
-    def __init__(self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], simulation_id: str = None,output_directory: Union[Path, str] = None):
+    def __init__(self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], number_of_time_steps_per_hour: int = None, simulation_id: str = None,output_directory: Union[Path, str] = None):
         self.idd_filepath = idd_filepath
         self.epw = epw
         self.idf = idf
+        self.number_of_time_steps_per_hour = number_of_time_steps_per_hour
         self.simulation_id = simulation_id
         self.output_directory = output_directory
         self.__epw_filepath = None
@@ -117,6 +120,10 @@ class EnergyPlusSimulator:
     @property
     def epw(self) -> str:
         return self.__epw
+    
+    @property
+    def number_of_time_steps_per_hour(self) -> int:
+        return self.__number_of_time_steps_per_hour
 
     @property
     def simulation_id(self) -> str:
@@ -157,6 +164,10 @@ class EnergyPlusSimulator:
 
         self.__epw = value
 
+    @number_of_time_steps_per_hour.setter
+    def number_of_time_steps_per_hour(self, value: int):
+        self.__number_of_time_steps_per_hour = value
+
     @simulation_id.setter
     def simulation_id(self, value: str):
         self.__simulation_id = value if value is not None else 'simulation'
@@ -189,7 +200,7 @@ class EnergyPlusSimulator:
     @classmethod
     def multi_simulate(cls, simulators: list, max_workers=None):
         simulators: List[EnergyPlusSimulator] = simulators
-        max_workers = 1 if max_workers is None else max_workers
+        max_workers = cpu_count() if max_workers is None else max_workers
         runs = []
 
         for simulator in simulators:
@@ -251,24 +262,54 @@ class EnergyPlusSimulator:
             f.write(idf)
 
     def preprocess_idf_for_simulation(self) -> IDF:
-        return self.get_idf_object(self.epw_filepath)
+        idf = self.get_idf_object(self.epw_filepath)
+
+        # update simulation time step
+        if self.number_of_time_steps_per_hour is not None:
+            idf.idfobjects['Timestep'] = []
+            obj = idf.newidfobject('Timestep')
+            obj.Number_of_Timesteps_per_Hour = self.number_of_time_steps_per_hour
+
+        else:
+            pass
+
+        return idf
 
     def get_idf_object(self, epw_filepath: Union[Path, str] = None) -> IDF:
-        return IDF(StringIO(self.idf), epw_filepath)
+        idf = StringIO(self.idf)
+
+        try:
+            idf = IDF(idf, epw_filepath)
+        
+        except IDDNotSetError as e:
+            self.idd_filepath = self.idd_filepath
+            idf = IDF(idf, epw_filepath)
+        
+        return idf 
     
 class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
     __DEFAULT_SCHEDULES_FILENAME = 'schedules.csv'
 
     def __init__(
-            self, idd_filepath: Union[Path, str], model: Union[Path, str], epw: Union[Path, str], schedules_filepath: Union[Path, str] = None, output_variables: List[str] = None, osm: bool = None, ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
-            output_directory: Union[Path, str] = None
+            self, version: Version, idd_filepath: Union[Path, str], model: Union[Path, str], epw: Union[Path, str], schedules_filepath: Union[Path, str] = None, 
+            number_of_time_steps_per_hour: int = None, output_variables: List[str] = None, output_meters: List[str] = None, osm: bool = None, ideal_loads: bool = None, 
+            edit_ems: bool = None, simulation_id: str = None, output_directory: Union[Path, str] = None
     ):
         self.__ideal_loads = False if ideal_loads is None else ideal_loads
         idf = self.__set_idf(model, osm=osm)
-        super().__init__(idd_filepath, idf, epw, simulation_id, output_directory)
+        super().__init__(
+            idd_filepath, idf, epw, number_of_time_steps_per_hour=number_of_time_steps_per_hour, 
+            simulation_id=simulation_id, output_directory=output_directory
+        )
+        self.version = version
         self.schedules_filepath = schedules_filepath
         self.output_variables = output_variables
+        self.output_meters = output_meters
         self.edit_ems = edit_ems
+
+    @property
+    def version(self) -> Version:
+        return self.__version
     
     @property
     def schedules_filepath(self) -> Union[Path, str]:
@@ -279,8 +320,16 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         return self.__output_variables
     
     @property
+    def output_meters(self) -> List[str]:
+        return self.__output_meters
+    
+    @property
     def edit_ems(self) -> bool:
         return self.__edit_ems
+    
+    @version.setter
+    def version(self, value: Version):
+        self.__version = value
     
     @schedules_filepath.setter
     def schedules_filepath(self, value: Union[Path, str]):
@@ -288,7 +337,11 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
 
     @output_variables.setter
     def output_variables(self, value: List[str]):
-        self.__output_variables = self.get_default_simulation_output_variables() if value is None else value
+        self.__output_variables = [] if value is None else value
+
+    @output_meters.setter
+    def output_meters(self, value: List[str]):
+        self.__output_meters = [] if value is None else value
 
     @edit_ems.setter
     def edit_ems(self, value: bool):
@@ -440,28 +493,43 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         idf.idfobjects['RunPeriodControl:DaylightSavingTime'] = []
 
         # set schedules filepath in model
-        schedule_names = pd.read_csv(self.schedules_filepath).columns.tolist()
+        if os.path.isfile(self.schedules_filepath):
+            schedule_names = pd.read_csv(self.schedules_filepath).columns.tolist()
 
-        for obj in idf.idfobjects['Schedule:File']:
-            if obj.Name.lower() in schedule_names:
-                obj.File_Name = self.schedules_filepath
-            
-            else:
-                continue
+            for obj in idf.idfobjects['Schedule:File']:
+                if obj.Name.lower() in schedule_names:
+                    obj.File_Name = self.schedules_filepath
+                
+                else:
+                    continue
         
-        # set output variables
+        elif self.version.dataset_type == VersionDatasetType.RESSTOCK.value:
+            raise Exception(f'{self.version.dataset_type} building simulations require a schedules_filepath variable')
+        
+        else:
+            pass
+        
+        # set output variables and meters
+        idf.idfobjects['Output:Variable'] = []
+        idf.idfobjects['Output:Meter'] = []
+
         for output_variable in self.output_variables:
             obj = idf.newidfobject('Output:Variable')
             obj.Variable_Name = output_variable
             obj.Reporting_Frequency = 'Timestep'
 
+        for output_meter in self.output_meters:
+            obj = idf.newidfobject('Output:Meter')
+            obj.Key_Name = output_meter
+
         return idf
     
-    def get_default_simulation_output_variables(self) -> List[str]:
-        default_output_variables = []
+    @classmethod
+    def get_default_simulation_output_variables(cls) -> List[str]:
+        variables = []
 
         # weather
-        default_output_variables += [
+        variables += [
             'Site Diffuse Solar Radiation Rate per Area', 
             'Site Direct Solar Radiation Rate per Area', 
             'Site Outdoor Air Drybulb Temperature', 
@@ -469,13 +537,13 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         ]
 
         # electric equipment
-        default_output_variables += [
+        variables += [
             'Zone Electric Equipment Electricity Rate', 
             'Zone Lights Electricity Rate', 
         ]
 
         # mechanical hvac
-        default_output_variables += [
+        variables += [
             'Air System Total Cooling Energy', 
             'Air System Total Heating Energy', 
             'Zone Air System Sensible Cooling Rate', 
@@ -484,24 +552,24 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         ]
 
         # ideal loads system
-        default_output_variables += [
+        variables += [
             'Zone Ideal Loads Zone Sensible Cooling Rate', 
             'Zone Ideal Loads Zone Sensible Heating Rate', 
         ]
 
         # other equipment
-        default_output_variables += [
+        variables += [
             'Other Equipment Convective Heating Rate', 
             'Other Equipment Convective Heating Energy'
         ]
 
         # dhw
-        default_output_variables += [
+        variables += [
             'Water Use Equipment Heating Rate', 
         ]
 
         # ieq
-        default_output_variables += [
+        variables += [
             'Zone Air Relative Humidity', 
             'Zone Air Temperature', 
             'Zone Thermostat Cooling Setpoint Temperature', 
@@ -509,11 +577,35 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         ]
 
         # occupancy
-        default_output_variables += [
+        variables += [
             'Zone People Occupant Count', 
         ]
 
-        return default_output_variables
+        return variables
+    
+    @classmethod
+    def get_default_simulation_output_meters(cls) -> List[str]:
+        # ref: https://bigladdersoftware.com/epx/docs/9-6/input-output-reference/input-for-output.html#outputmeter-and-outputmetermeterfileonly
+        fuels =  [
+            'Electricity',
+            'NaturalGas',
+            'Gasoline',
+            'Diesel',
+            'Coal',
+            'Propane',
+            'Steam',
+            'Water',
+        ]
+
+        # facility = building + plant + hvac + exterior
+        # building = sum(zones)
+        sites = [
+            'Facility',
+            'Building'
+        ]
+        meters = [f'{f}:{s}' for f in fuels for s in sites]
+        
+        return meters
     
     def __set_idf(self, model: Union[Path, str], osm: bool = None) -> str:
         osm = False if osm is None else osm
