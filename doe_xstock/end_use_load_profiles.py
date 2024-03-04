@@ -114,7 +114,7 @@ class EndUseLoadProfiles:
         self.version.release = self.release
     
     def simulate_buildings(buildings: List[EndUseLoadProfilesBuilding]) -> List[EndUseLoadProfilesBuilding]:
-        EndUseLoadProfilesEnergyPlusSimulator.multi_simulate(buildings)
+        EndUseLoadProfilesEnergyPlusSimulator.multi_simulate([b.simulator for b in buildings])
 
         return buildings
     
