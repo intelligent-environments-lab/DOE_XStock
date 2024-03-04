@@ -176,7 +176,7 @@ class EnergyPlusSimulator:
     def output_directory(self, value: Union[Path, str]):
         self.__output_directory = os.path.abspath(value) if value is not None else os.path.abspath('simulation')
 
-    def get_result_database(self) -> SQLiteDatabase:
+    def get_output_database(self) -> SQLiteDatabase:
         filepath = os.path.join(self.output_directory, f'{self.simulation_id}.sql')
 
         if os.path.isfile(filepath):
@@ -186,17 +186,26 @@ class EnergyPlusSimulator:
             raise FileNotFoundError(f'No SQLite database exists for simulation. Make sure a simluation has been run'\
                 ' using simulate function and the simulation is set to output into SQLite database.')
         
-    def get_result_csv(self) -> pd.DataFrame:
+    def get_output_variables_csv(self) -> pd.DataFrame:
         filepath = os.path.join(self.output_directory, f'{self.simulation_id}.csv')
 
         if os.path.isfile(filepath):
             return pd.read_csv(filepath)
         
         else:
-            raise FileNotFoundError(f'No CSV exists for simulation. Make sure a simluation has been run'\
-                ' using simulate function and the simulation is set to output into SQLite database.')
+            raise FileNotFoundError(f'No CSV exists for simulation output variables. Make sure a simluation has been run'\
+                ' using simulate function and the IDF contains Output:Variable objects.')
+        
+    def get_output_meters_csv(self) -> pd.DataFrame:
+        filepath = os.path.join(self.output_directory, f'{self.simulation_id}Meter.csv')
 
-    
+        if os.path.isfile(filepath):
+            return pd.read_csv(filepath)
+        
+        else:
+            raise FileNotFoundError(f'No CSV exists for simulation output meters. Make sure a simluation has been run'\
+                ' using simulate function and the IDF contains Output:Meter objects.')
+
     @classmethod
     def multi_simulate(cls, simulators: list, max_workers=None):
         simulators: List[EnergyPlusSimulator] = simulators
