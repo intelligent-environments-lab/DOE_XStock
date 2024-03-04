@@ -1,4 +1,4 @@
-CityLearn==1.7.0
+CityLearn==1.8.0
 ipykernel
 matplotlib==3.3.4
 seaborn==0.11.2
