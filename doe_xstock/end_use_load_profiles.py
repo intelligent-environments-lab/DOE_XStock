@@ -120,8 +120,9 @@ class EndUseLoadProfiles:
     
     def simulate_building(
         self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
-        output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, model: Union[Path, str] = None, 
-        epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, **kwargs
+        output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, 
+        default_output_variables: bool = None, default_output_meters: bool = None, model: Union[Path, str] = None, epw: Union[Path, str] = None, 
+        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, **kwargs
     ) -> EndUseLoadProfilesBuilding:
         building = self.prepare_building_for_simulation(
             bldg_id,
@@ -132,6 +133,8 @@ class EndUseLoadProfiles:
             output_directory=output_directory,
             output_variables=output_variables,
             output_meters=output_meters,
+            default_output_variables=default_output_variables,
+            default_output_meters=default_output_meters,
             model=model,
             epw=epw,
             osm=osm,
@@ -144,9 +147,18 @@ class EndUseLoadProfiles:
     
     def prepare_building_for_simulation(
         self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
-        output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, model: Union[Path, str] = None, 
-        epw: Union[Path, str] = None, osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None
+        output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, 
+        default_output_variables: bool = None, default_output_meters: bool = None, model: Union[Path, str] = None, epw: Union[Path, str] = None, 
+        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None
     ) -> EndUseLoadProfilesBuilding:
+        # set output variables and meters
+        default_output_variables = False if default_output_variables is None else default_output_variables
+        default_output_meters = False if default_output_meters is None else default_output_meters
+        default_output_variables = EndUseLoadProfilesEnergyPlusSimulator.get_default_simulation_output_variables() if default_output_variables else []
+        default_output_meters = EndUseLoadProfilesEnergyPlusSimulator.get_default_simulation_output_meters() if default_output_meters else []
+        output_variables = default_output_variables if output_variables is None else output_variables
+        output_meters = default_output_meters if output_meters is None else output_meters
+
         # get building object
         building = self.get_building(bldg_id)
         building.simulator = EndUseLoadProfilesEnergyPlusSimulator(
