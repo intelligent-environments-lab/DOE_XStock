@@ -13,7 +13,8 @@ import sys
 from multiprocessing import cpu_count
 import numpy as np
 import pandas as pd
-from citylearn.citylearn import CityLearnEnv, NormalizedObservationWrapper, StableBaselines3Wrapper
+from citylearn.citylearn import CityLearnEnv
+from citylearn.wrappers import NormalizedObservationWrapper, StableBaselines3Wrapper
 from citylearn.utilities import read_json
 from preprocess import get_settings, get_timestamps
 
@@ -56,6 +57,7 @@ def simulate(**kwargs):
     timestamps = get_timestamps()
     schema = kwargs['schema']
     schema = read_json(os.path.join(settings['schema_directory'], schema))
+    schema['root_directory'] = os.path.split(Path(kwargs['schema']).absolute())[0]
     simulation_id = kwargs.get('simulation_id', schema['simulation_id'])
 
     # set buildings
