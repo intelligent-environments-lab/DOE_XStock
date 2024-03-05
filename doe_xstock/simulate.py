@@ -530,6 +530,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         for output_meter in self.output_meters:
             obj = idf.newidfobject('Output:Meter')
             obj.Key_Name = output_meter
+            obj.Reporting_Frequency = 'Timestep'
 
         return idf
     
