@@ -254,8 +254,9 @@ class BuildingData(Data):
         self.__bldg_id = 1 if value is None else value
 
     def get_metadata(self) -> Mapping[str, Union[float, int, str]]:
-        metadata = Metadata(version=self.version).get(filters={'bldg_id': [self.bldg_id]})
-        metadata = metadata.reset_index().iloc[0].to_dict()
+        metadata = Metadata(version=self.version).get()
+        metadata = metadata.loc[self.bldg_id].to_dict()
+        metadata = {'bldg_id': self.bldg_id, **metadata}
         
         return metadata
 
