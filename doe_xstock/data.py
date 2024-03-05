@@ -1,6 +1,7 @@
 from enum import Enum, unique
 import gzip
 import io
+import logging
 import os
 from platformdirs import user_cache_dir
 import shutil
@@ -13,6 +14,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 
+LOGGER = logging.getLogger()
+
 @unique
 class VersionDatasetType(Enum):
     RESSTOCK = 'resstock'
@@ -24,13 +27,15 @@ class VersionWeatherData(Enum):
     AMY2018 = 'amy2018'
 
 class Version:
+    __DEFAULT_YEAR_OF_PUBLICATION = 2021
+
     def __init__(self, dataset_type: Union[str, VersionDatasetType] = None, weather_data: Union[str, VersionWeatherData] = None, year_of_publication: int = None, release: int = None, cache: bool = None):
+        self.root_url = 'https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/'
         self.dataset_type = dataset_type
         self.weather_data = weather_data
         self.year_of_publication = year_of_publication
         self.release = release
         self.cache = cache
-        self.root_url = 'https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/'
 
     @property
     def cache_directory(self) -> str:
@@ -65,19 +70,49 @@ class Version:
     
     @dataset_type.setter
     def dataset_type(self, value: Union[str, VersionDatasetType]):
-        self.__dataset_type = VersionDatasetType.RESSTOCK.value if value is None else (
-            value.value if isinstance(value, VersionDatasetType) else value
-        )
+        if value is None:
+            value = VersionDatasetType.RESSTOCK.value
+
+        elif isinstance(value, VersionDatasetType):
+            value = value.value
+
+        else:
+            valid_values = [v.value for v in VersionDatasetType]
+            assert value in valid_values,\
+                f'\'{value}\' is not a valid value for dataset_type. Valid values are {valid_values}' 
+        
+        self.__dataset_type = value
 
     @weather_data.setter
     def weather_data(self, value: Union[str, VersionWeatherData]):
-        self.__weather_data = VersionWeatherData.TMY3.value if value is None else (
-            value.value if isinstance(value, VersionWeatherData) else value
-        )
+        if value is None:
+            value = VersionWeatherData.TMY3.value
+
+        elif isinstance(value, VersionWeatherData):
+            value = value.value
+
+        else:
+            valid_values = [v.value for v in VersionWeatherData]
+            assert value in valid_values,\
+                f'\'{value}\' is not a valid value for weather_data. Valid values are {valid_values}' 
+        
+        self.__weather_data = value
 
     @year_of_publication.setter
     def year_of_publication(self, value: int):
-        self.__year_of_publication = 2021 if value is None else value
+        if value is None:
+            value = self.__DEFAULT_YEAR_OF_PUBLICATION
+
+        else:
+            assert value >= self.__DEFAULT_YEAR_OF_PUBLICATION,\
+                f'year_of_publication must be >= {self.__DEFAULT_YEAR_OF_PUBLICATION}'
+            
+            if value > self.__DEFAULT_YEAR_OF_PUBLICATION:
+                LOGGER.warning(f'Setting year_of_publication to {value} may have URL endpoint'\
+                    f' issues when retrieving data from {self.root_url} as this library has only been'\
+                        f' tested for {self.__DEFAULT_YEAR_OF_PUBLICATION} year_of_publication.')
+
+        self.__year_of_publication = value
 
     @release.setter
     def release(self, value: int):
