@@ -1,60 +1,64 @@
-# DOE XStock: BS2023
-## Description
-This repository tag is used to reproduce the `A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn` Building and Simulation 2023 conference paper.
+# A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn
+This source code in the directory is used to reproduce the results in the `A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn` paper.
 
 ## Installation
-To install, clone the repository and checkout the `bs2023` branch:
-```console
-git clone https://github.com/intelligent-environments-lab/doe_xstock.git
-git checkout bs2023
+First, clone this repository as:
+```bash
+git clone https://github.com/intelligent-environments-lab/DOE_XStock.git
 ```
 
-## Dependencies
-The project's Python 3rd party library dependencies are listed in [requirements.txt](https://github.com/intelligent-environments-lab/DOE_XStock/blob/master/requirements.txt) and can be installed via `pip`:
-```console
-pip install requirements.txt
-```
-
-Download [EnergyPlus 9.6.0](https://github.com/NREL/EnergyPlus/releases/tag/v9.6.0) to be able to run building energy model simulations.
-
-The workflow assumes a Linux or Mac based machine is in use.
-
-## Reproduction Workflow
-
-### Neighborhoods
-To reproduce the neighborhoods used in the `A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn` Building and Simulation 2023 conference paper, first download the relevant building data for the three neighborhoods (CA, Alameda County; TX, Travis County; and VT, Chittenden County)from the [End-Use Load Profiles (EULP) for the U.S. Building Stock database](https://www.nrel.gov/buildings/end-use-load-profiles.html):
-```console
-sh workflow/download.sh
-```
-
-Insert the ecobee setpoint profiles in the database by executing the [ecobee.ipynb](analysis/ecobee.ipynb) notebook from start to end. The inserted setpoint profiles are the representative profiles after clustering as described in `Figure 2b` in the paper.
-
-The next step is to discover the representative building clusters (`Figure 2a` in paper):
-```console
-sh workflow/metadata_clustering.sh
-```
-
-The following step runs the EnergyPlus simulations for the selected representative neighborhood buildings:
-```console
-sh workflow/set_lstm_train_data.sh
-```
-
-Finally, execute the [post_simulation.ipynb](analysis/post_simulation.ipynb) notebook from start to end to set the CityLearn input data.
-
-### Control Simulation
-To reproduce the CityLearn control simulation, navigate to the `citylearn_simulation` path:
-```console
+Then navigate to this directory in the repository:
+```bash
 cd citylearn_simulation
 ```
 
-Run the `preprocess.sh` workflow to prepare the CityLearn schemas and simulation work orders for the three neighborhoods:
-```console
+Install the dependencies in [requirements.txt](requirements.txt):
+```bash
+pip install -r requirements.txt
+```
+
+It is important that the specified `stable-baseline3` version or earlier is used to avoid issues with `stable-baseline3` stopping support for `gym` environments, which the `CityLearn` version used in this work is.
+
+## Running simulations
+Run the [workflow](workflow/preprocess.sh) to generate the simulation input dataset and workflows for running the simulations:
+```bash
 sh workflow/preprocess.sh
 ```
 
-Next, run the generated work orders:
-```console
-sh simulate.sh
+The current state of the repository already has the simulation input dataset in [citylearn_simulation/data/neighborhoods](citylearn_simulation/data/neighborhoods) where you will find three CityLearn schemas for the three different counties.
+
+Finally, execute the [simulate.sh](workflow/simulate.sh) workflow that runs the CityLearn simulations for the three neighborhoods:
+```bash
+sh workflow/simulate.sh
 ```
 
-When the CityLearn simulations complete, run the [post_simulation.ipynb](citylearn_simulation/analysis/analysis.ipynb) notebook from start to end to generate the control simulation results that are reported in the paper.
+## Results
+The results of the simulation are stored in `data/simulation_output` that is automatically generated and has one subdirectory for each building that is simulated. This subdirectory has four output files:
+1. `building_id-environment.csv`: Time series of static and runtime environment variables during training episodes and final evaluation.
+2. `building_id-kpi.csv`: Energy flexibility KPIs calculated at the end of each episode during training episodes and final evaluation.
+3. `building_id-reward.csv`: Time series of reward during training episodes and final evaluation.
+4. `building_id-timer.csv`: Time it took for each episode to complete during training episodes and final evaluation.
+
+The notebooks in the [analysis](analysis) directory reference these results to generate the figures and statistics reported in the paper.
+
+## Citation
+```bibtex
+@inproceedings{bs2023_1404,
+	doi = {https://doi.org/10.26868/25222708.2023.1404},
+	url = {https://publications.ibpsa.org/conference/paper/?id=bs2023_1404},
+	year = {2023},
+	month = {September},
+	publisher = {IBPSA},
+	author = {Kingsley  Nweye  and   Kathryn  Kaspar  and   Giacomo  Buscemi  and   Giuseppe  Pinto  and   Han  Li  and   Tianzhen  Hong  and   Mohamed  Ouf  and   Alfonso  Capozzoli  and   Zoltan  Nagy},
+	title  = {A framework for the design of representative neighborhoods for energy flexibility assessment in CityLearn},
+	booktitle = {Proceedings of Building Simulation 2023: 18th Conference of IBPSA},
+	volume  = {18},
+	isbn = {},
+	address  = {Shanghai, China},
+	series  = {Building Simulation},
+	pages = {3351--3358},
+	issn = {2522-2708},
+	Organisation = {IBPSA},
+	Editors = {}
+}
+```
