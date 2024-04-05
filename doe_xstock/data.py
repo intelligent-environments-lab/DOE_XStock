@@ -303,6 +303,7 @@ class TimeSeries(BuildingData, ParquetData):
     def relative_path(self) -> str:
         metadata = self.get_metadata()
         upgrade = metadata['upgrade']
+        upgrade = int(upgrade)
         county = metadata['in.county']
         path = f'timeseries_individual_buildings/by_county/upgrade={upgrade}/county={county}/{self.bldg_id}-{upgrade}.parquet' 
 
