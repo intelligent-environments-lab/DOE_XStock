@@ -3,6 +3,6 @@ eppy
 pandas
 platformdirs
 pyarrow
-openstudio==3.3.0
+openstudio
 requests
 simplejson
