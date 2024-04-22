@@ -3,7 +3,7 @@ from multiprocessing import cpu_count
 import os
 from pathlib import Path
 import re
-from typing import Mapping, List, Union
+from typing import List, Mapping, Union
 from eppy.modeleditor import IDDNotSetError, IDF
 from eppy.runner.run_functions import EnergyPlusRunError, runIDFs
 from openstudio import energyplus, osversion, openstudiomodelcore
@@ -174,7 +174,7 @@ class EnergyPlusSimulator:
 
     @output_directory.setter
     def output_directory(self, value: Union[Path, str]):
-        self.__output_directory = os.path.abspath(value) if value is not None else os.path.abspath('simulation')
+        self.__output_directory = os.path.abspath(value) if value is not None else os.path.abspath(self.simulation_id)
 
     def get_output_database(self) -> SQLiteDatabase:
         filepath = os.path.join(self.output_directory, f'{self.simulation_id}.sql')
@@ -518,6 +518,15 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         else:
             pass
         
+        # set ideal loads to satisfy solely sensible load
+        if self.__ideal_loads:
+            for obj in idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem']:
+                obj.Dehumidification_Control_Type = 'None'
+                obj.Cooling_Sensible_Heat_Ratio = 1.0
+        
+        else:
+            pass
+        
         # set output variables and meters
         idf.idfobjects['Output:Variable'] = []
         idf.idfobjects['Output:Meter'] = []
@@ -621,6 +630,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         osm = False if osm is None else osm
 
         if osm:
+            self.validate_osm(model)
             osm_model = OpenStudioModelEditor(model)
 
             if self.__ideal_loads:
@@ -637,4 +647,34 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         else:
             idf = model
 
+        self.validate_idf(idf)
+
         return idf
+    
+    def validate_idf(self, idf: str):
+        if not 'ZoneControl:Thermostat,' in idf:
+            raise EnergyPlusSimulationError(error_id=3, message='ZoneControl:Thermostat not found in idf.')
+        
+        else:
+            pass
+
+    def validate_osm(self, osm: str):
+        if not 'OS:AirLoopHVAC:UnitarySystem' in osm:
+            raise EnergyPlusSimulationError(error_id=1, message='OS:AirLoopHVAC:UnitarySystem not found in osm.')
+        
+        elif not 'OS:ThermostatSetpoint:DualSetpoint' in osm:
+            raise EnergyPlusSimulationError(error_id=2, message='OS:ThermostatSetpoint:DualSetpoint not found in osm.')
+        
+        else:
+            pass
+    
+class Error(Exception):
+    """Base class for other exceptions."""
+
+class EnergyPlusSimulationError(Error):
+    __MESSAGE = 'Simulation errors were found.'
+  
+    def __init__(self, error_id: int, message: str = None):
+        self.error_id = error_id
+        self.message = self.__MESSAGE if message is None else message
+        super().__init__(message)
