@@ -7,23 +7,32 @@ import numpy as np
 import pandas as pd
 
 class SQLiteDatabase:
-    def __init__(self, filepath: Union[Path, str]):
+    def __init__(self, filepath: Union[Path, str], timeout: int = None):
         self.filepath = filepath
         self.__register_adapter()
+        self.timeout = timeout
     
     @property
     def filepath(self) -> Union[Path, str]:
         return self.__filepath
+    
+    @property
+    def timeout(self) -> int:
+        return self.__timeout
     
     @filepath.setter
     def filepath(self, value: Union[Path, str]):
         self.__filepath = value
 
     def __get_connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.filepath)
+        connection = sqlite3.connect(self.filepath, timeout=self.timeout)
         connection = self.create_functions(connection)
 
         return connection
+    
+    @timeout.setter
+    def timeout(self, value: int):
+        self.__timeout = 60 if value is None else value # seconds
 
     def __validate_query(self, query: str):
         query = query.replace(',)' ,')')
