@@ -54,6 +54,7 @@ class OpenStudioModelEditor:
                 if component.to_WaterUseConnections().is_initialized() or component.to_CoilWaterHeatingDesuperheater().is_initialized():
                     shw_use = True
                     break
+                
                 else:
                     pass
 
@@ -398,6 +399,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
     def remove_ems_objs_in_error(self, patterns: List[str] = None) -> Mapping[str, List[str]]:
         default_patterns = [
             r'EnergyManagementSystem:Sensor=\S+',
+            r'EnergyManagementSystem:InternalVariable=\S+',
             # r'EnergyManagementSystem:ProgramCallingManager=.+\s+'
         ]
         patterns = default_patterns if patterns is None else patterns
@@ -523,6 +525,13 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
             for obj in idf.idfobjects['HVACTemplate:Zone:IdealLoadsAirSystem']:
                 obj.Dehumidification_Control_Type = 'None'
                 obj.Cooling_Sensible_Heat_Ratio = 1.0
+
+            # turn off sizing
+            for obj in idf.idfobjects['SimulationControl']:
+                obj.Do_Zone_Sizing_Calculation = 'No'
+                obj.Do_System_Sizing_Calculation = 'No'
+                obj.Do_Plant_Sizing_Calculation = 'No'
+                obj.Run_Simulation_for_Sizing_Periods = 'No'
         
         else:
             pass
@@ -629,8 +638,14 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
     def __set_idf(self, model: Union[Path, str], osm: bool = None) -> str:
         osm = False if osm is None else osm
 
+        if os.path.isfile(model):
+            with open(model, 'r') as f:
+                model = f.read()
+
+        else:
+            pass
+
         if osm:
-            self.validate_osm(model)
             osm_model = OpenStudioModelEditor(model)
 
             if self.__ideal_loads:
@@ -652,18 +667,14 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         return idf
     
     def validate_idf(self, idf: str):
-        if not 'ZoneControl:Thermostat,' in idf:
+        # if not 'AirLoopHVAC:UnitarySystem,' in idf:
+        #     raise EnergyPlusSimulationError(error_id=1, message='AirLoopHVAC:UnitarySystem not found in idf.')
+        
+        if not 'ThermostatSetpoint:DualSetpoint,' in idf:
+             raise EnergyPlusSimulationError(error_id=2, message='ThermostatSetpoint:DualSetpoint not found in idf.')
+        
+        elif not 'ZoneControl:Thermostat,' in idf:
             raise EnergyPlusSimulationError(error_id=3, message='ZoneControl:Thermostat not found in idf.')
-        
-        else:
-            pass
-
-    def validate_osm(self, osm: str):
-        if not 'OS:AirLoopHVAC:UnitarySystem' in osm:
-            raise EnergyPlusSimulationError(error_id=1, message='OS:AirLoopHVAC:UnitarySystem not found in osm.')
-        
-        elif not 'OS:ThermostatSetpoint:DualSetpoint' in osm:
-            raise EnergyPlusSimulationError(error_id=2, message='OS:ThermostatSetpoint:DualSetpoint not found in osm.')
         
         else:
             pass
