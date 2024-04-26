@@ -251,6 +251,7 @@ class EnergyPlusSimulator:
             'output_directory': str(self.output_directory),
             'readvars': True,
             'expandobjects': True,
+            'idd': self.idd_filepath,
             'verbose': 'q',
         }
         options = {**options, **kwargs}
