@@ -25,7 +25,7 @@ Run the [workflow](workflow/preprocess.sh) to generate the simulation input data
 sh workflow/preprocess.sh
 ```
 
-The current state of the repository already has the simulation input dataset in [citylearn_simulation/data/neighborhoods](citylearn_simulation/data/neighborhoods) where you will find three CityLearn schemas for the three different counties.
+The current state of the repository already has the simulation input dataset in [citylearn_simulation/data/neighborhood](citylearn_simulation/data/neighborhood) where you will find three CityLearn schemas for the three different counties.
 
 Finally, execute the [simulate.sh](workflow/simulate.sh) workflow that runs the CityLearn simulations for the three neighborhoods:
 ```bash
