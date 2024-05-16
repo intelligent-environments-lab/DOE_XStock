@@ -437,6 +437,9 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
                 
                 elif current_line.startswith('If'):
                     o[f'Program_Line_{l}'] = f'If 1<0'
+
+                elif current_line.startswith('ElseIf'):
+                    o[f'Program_Line_{l}'] = f'ElseIf 1<0'
                 
                 else:
                     raise AssertionError(f'Unknown line format: {current_line}')
