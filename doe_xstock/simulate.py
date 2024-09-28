@@ -6,7 +6,7 @@ import re
 from typing import List, Mapping, Union
 from eppy.modeleditor import IDDNotSetError, IDF
 from eppy.runner.run_functions import EnergyPlusRunError, runIDFs
-from openstudio import energyplus, osversion, openstudiomodelcore
+from openstudio import energyplus, isomodel, osversion, openstudiomodelcore
 import pandas as pd
 from doe_xstock.data import Version, VersionDatasetType
 from doe_xstock.database import SQLiteDatabase
@@ -93,6 +93,12 @@ class OpenStudioModelEditor:
         osm = str(osm)
 
         self.osm = osm
+
+    def get_roof_area(self) -> float:
+        iso_model = isomodel.ISOModelForwardTranslator().translateModel(self.get_model())
+        area = iso_model.roofArea()
+        
+        return area
 
     def get_model(self) -> openstudiomodelcore.Model:
         version_translator = osversion.VersionTranslator()
