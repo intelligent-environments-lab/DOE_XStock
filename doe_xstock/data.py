@@ -290,7 +290,7 @@ class BuildingData(Data):
 
     def get_metadata(self) -> Mapping[str, Union[float, int, str]]:
         metadata = Metadata(version=self.version).get()
-        metadata = metadata.loc[self.bldg_id].to_dict()
+        metadata = metadata.loc[self.bldg_id].iloc[0].to_dict()
         metadata = {'bldg_id': self.bldg_id, **metadata}
         
         return metadata
