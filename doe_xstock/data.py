@@ -1,268 +1,571 @@
-from datetime import datetime, timedelta
+from enum import Enum, unique
+import gzip
+import io
+import logging
 import os
-import random
-import ssl
-from meteostat import Stations
-from meteostat import Daily, Hourly, Monthly, units
-import numpy as np
+from platformdirs import user_cache_dir
+import shutil
+from typing import Any, List, Mapping, Tuple, Union
+import urllib.parse
+from bs4 import BeautifulSoup
 import pandas as pd
-from doe_xstock.database import SQLiteDatabase
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import urllib3
 
-class MeteostatWeather:
-    def __init__(self, station_ids, weather_variables=None, resolution=None, earliest_start_timestamp=None, latest_end_timestamp=None, model=None, gap_limit=None):
-        self.__unit_system = units.scientific
-        self.station_ids = station_ids
-        self.weather_variables = weather_variables
-        self.__resolution_constructor = None
-        self.resolution = resolution
-        self.earliest_start_timestamp = earliest_start_timestamp
-        self.latest_end_timestamp = latest_end_timestamp
-        self.model = model
-        self.gap_limit = gap_limit
-        self.__set_ssl()
+LOGGER = logging.getLogger()
 
-    @property
-    def station_ids(self):
-        return self.__station_ids
+@unique
+class VersionDatasetType(Enum):
+    RESSTOCK = 'resstock'
+    COMSTOCK = 'comstock'
 
-    @property
-    def weather_variables(self):
-        return self.__weather_variables
+@unique
+class VersionWeatherData(Enum):
+    TMY3 = 'tmy3'
+    AMY2018 = 'amy2018'
 
-    @property
-    def resolution(self):
-        return self.__resolution
+class Version:
+    __DEFAULT_YEAR_OF_PUBLICATION = 2021
 
-    @property
-    def earliest_start_timestamp(self):
-        return self.__earliest_start_timestamp
+    def __init__(self, dataset_type: Union[str, VersionDatasetType] = None, weather_data: Union[str, VersionWeatherData] = None, year_of_publication: int = None, release: int = None, cache: bool = None):
+        self.root_url = 'https://oedi-data-lake.s3.amazonaws.com/nrel-pds-building-stock/end-use-load-profiles-for-us-building-stock/'
+        self.dataset_type = dataset_type
+        self.weather_data = weather_data
+        self.year_of_publication = year_of_publication
+        self.release = release
+        self.cache = cache
 
     @property
-    def latest_end_timestamp(self):
-        if self.__latest_end_timestamp is None:
-            timestamp = pd.to_datetime(datetime.now() - timedelta(days=1))
-            timestamp = timestamp.normalize()
-        else:
-            timestamp = pd.to_datetime(self.__latest_end_timestamp)
+    def cache_directory(self) -> str:
+        directory = os.path.join(user_cache_dir('end_use_load_profiles'),str(self.year_of_publication), f'{self.dataset_type}_{self.weather_data}_release_{self.release}/')
+        os.makedirs(directory, exist_ok=True)
 
-        return timestamp
+        return directory
 
     @property
-    def model(self):
-        return self.__model
+    def url(self) -> str:
+        return urllib.parse.urljoin(self.root_url, f'{self.year_of_publication}/{self.dataset_type}_{self.weather_data}_release_{self.release}/')
 
     @property
-    def gap_limit(self):
-        return self.__gap_limit
-
-    @station_ids.setter
-    def station_ids(self, station_ids):
-        self.__station_ids = station_ids
-
-    @weather_variables.setter
-    def weather_variables(self, weather_variables):
-        self.__weather_variables = weather_variables
+    def dataset_type(self) -> str:
+        return self.__dataset_type
     
-    @resolution.setter
-    def resolution(self, resolution):
-        self.__resolution = 'hourly' if resolution is None else resolution
-        self.__resolution_constructor = {'hourly':Hourly, 'daily':Daily, 'monthly':Monthly}[self.resolution]
-        self.__resolution_constructor.max_age = 0 # no caching
+    @property
+    def weather_data(self) -> str:
+        return self.__weather_data
+    
+    @property
+    def year_of_publication(self) -> int:
+        return self.__year_of_publication
+    
+    @property
+    def release(self) -> int:
+        return self.__release
+    
+    @property
+    def cache(self) -> bool:
+        return self.__cache
+    
+    @dataset_type.setter
+    def dataset_type(self, value: Union[str, VersionDatasetType]):
+        if value is None:
+            value = VersionDatasetType.RESSTOCK.value
 
-    @earliest_start_timestamp.setter
-    def earliest_start_timestamp(self, earliest_start_timestamp):
-        if earliest_start_timestamp is None:
-            self.__earliest_start_timestamp = pd.to_datetime('2009-01-01')
+        elif isinstance(value, VersionDatasetType):
+            value = value.value
+
         else:
-            self.__earliest_start_timestamp = pd.to_datetime(earliest_start_timestamp)
-
-    @latest_end_timestamp.setter
-    def latest_end_timestamp(self, latest_end_timestamp):
-        self.__latest_end_timestamp = latest_end_timestamp
-
-    @model.setter
-    def model(self, model):
-        self.__model = False if model is None else model
-
-    @gap_limit.setter
-    def gap_limit(self, gap_limit):
-        self.__gap_limit = 3 if gap_limit is None else gap_limit
-
-    def download(self,**kwargs):
-        data_list = []
-
-        for station_id in self.station_ids:
-            kwargs = {
-                'loc':station_id,
-                'start':self.earliest_start_timestamp,
-                'end':self.latest_end_timestamp,
-                **kwargs
-            }
-            data = self.__resolution_constructor(**kwargs)
-
-            if self.model:
-                data.normalize()
-                data.interpolate()
-            else:
-                pass
-
-            data = data.convert(self.__unit_system)
-            data = data.fetch()
-            weather_variables = data.columns.tolist() if self.weather_variables is None else self.weather_variables
-            data = data[weather_variables].copy()
-
-            if data.shape[1] > 0:
-                data_list.append(self.__preprocess(data,station_id))
-            else:
-                pass
-
-        if len(data_list) > 0:
-            return pd.concat(data_list,ignore_index=True)
-        else:
-            return None
+            valid_values = [v.value for v in VersionDatasetType]
+            assert value in valid_values,\
+                f'\'{value}\' is not a valid value for dataset_type. Valid values are {valid_values}' 
         
-    def __preprocess(self, data, station_id):
-        data['timestamp'] = pd.to_datetime(data.index).strftime('%Y-%m-%d %H:%M:%S')
-        data['station_id'] = station_id
-        data['resolution'] = self.resolution
-        return data
+        self.__dataset_type = value
 
-    @classmethod
-    def get_station_from_coordinates(cls, latitude, longitude, radius=None, count=None):
-        count = 1 if count is None else count
-        stations = Stations()
-        data = stations.nearby(latitude, longitude, radius=radius).fetch(count)
-        return data
+    @weather_data.setter
+    def weather_data(self, value: Union[str, VersionWeatherData]):
+        if value is None:
+            value = VersionWeatherData.TMY3.value
 
-    @classmethod
-    def convert_sea_level_pressure_to_station_pressure(cls, sea_level_pressure, elevation):
-        # this method was copied from:
-        # https://github.com/IMMM-SFA/diyepw/blob/f1904bcde05f29d63b91b6c2c73a4cc7fdf9103a/diyepw/create_amy_epw_file.py#L404
+        elif isinstance(value, VersionWeatherData):
+            value = value.value
 
-        # convert (or keep) pressure and elevation inputs as floats
-        sea_level_pressure = float(sea_level_pressure)
-        elevation = float(elevation)
-
-        # convert from hectopascals to inHg
-        Pa_inHg = sea_level_pressure * 0.029529983071445
-
-        # calculate station pressure according to formula from https://www.weather.gov/epz/wxcalc_stationpressure
-        Pstn_inHg = Pa_inHg * ((288 - 0.0065*elevation)/288)**5.2561
-
-        # convert from inHg to Pa
-        Pstn = Pstn_inHg * 3386.389
-
-        return Pstn
-
-    def __set_ssl(self):
-        try:
-            _create_unverified_https_context = ssl._create_unverified_context
-        except AttributeError:
-            pass
         else:
-            ssl._create_default_https_context = _create_unverified_https_context
+            valid_values = [v.value for v in VersionWeatherData]
+            assert value in valid_values,\
+                f'\'{value}\' is not a valid value for weather_data. Valid values are {valid_values}' 
+        
+        self.__weather_data = value
 
-class CityLearnData:
-    @staticmethod
-    def get_building_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, reference=None):
-        database = CityLearnData.get_database(
-            dataset_type, 
-            weather_data, 
-            year_of_publication, 
-            release, 
-            bldg_id, 
-            simulation_output_directory, 
-            simulation_id=simulation_id,
-            reference=reference,
-        )
-        simulation_id = CityLearnData.__get_simulation_id(dataset_type, weather_data, year_of_publication, release, bldg_id)
-        filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_building_data.sql')
-        data = database.query_table_from_file(filepath)
-        setpoint_column_name = 'Temperature Set Point (C)'
+    @year_of_publication.setter
+    def year_of_publication(self, value: int):
+        if value is None:
+            value = self.__DEFAULT_YEAR_OF_PUBLICATION
 
-        if data[setpoint_column_name].isnull().sum() == data.shape[0]:
-            setpoint_filepath = os.path.join(simulation_output_directory, simulation_id, 'setpoint.csv')
-            setpoints = pd.read_csv(setpoint_filepath)
-            data[setpoint_column_name] = setpoints['setpoint'].tolist()
+        else:
+            assert value >= self.__DEFAULT_YEAR_OF_PUBLICATION,\
+                f'year_of_publication must be >= {self.__DEFAULT_YEAR_OF_PUBLICATION}'
+            
+            if value > self.__DEFAULT_YEAR_OF_PUBLICATION:
+                LOGGER.warning(f'Setting year_of_publication to {value} may have URL endpoint'\
+                    f' issues when retrieving data from {self.root_url} as this library has only been'\
+                        f' tested for {self.__DEFAULT_YEAR_OF_PUBLICATION} year_of_publication.')
+
+        self.__year_of_publication = value
+
+    @release.setter
+    def release(self, value: int):
+        self.__release = 1 if value is None else value
+
+    @cache.setter
+    def cache(self, value: bool):
+        self.__cache = False if value is None else value
+
+    def clear_cache(self):
+        if os.path.isdir(self.cache_directory):
+            shutil.rmtree(self.cache_directory)
+        
         else:
             pass
 
-        return data
+    def __str__(self) -> str:
+        return f'{self.dataset_type}_{self.year_of_publication}_{self.weather_data}_release_{self.release}'
+
+class Data:
+    def __init__(self, name: str = None, relative_path: str = None, version: Version = None, cache: bool = None):
+        self.name = name
+        self.relative_path = relative_path
+        self.version = version
+        self.cache = cache
+
+    @property
+    def name(self) -> str:
+        return self.__name
     
-    @staticmethod
-    def get_weather_data(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, shifts=None, accuracy=None, random_seed=None, reference=None):
-        database = CityLearnData.get_database(
-            dataset_type, 
-            weather_data, 
-            year_of_publication, 
-            release, 
-            bldg_id, 
-            simulation_output_directory, 
-            simulation_id=simulation_id,
-            reference=reference,
-        )
-        filepath = os.path.join(os.path.dirname(__file__),'misc/queries/get_citylearn_weather_data.sql')
-        data = database.query_table_from_file(filepath)
-        columns = data.columns
-        random_seed = 1 if random_seed is None else random_seed
+    @property
+    def relative_path(self) -> str:
+        return self.__relative_path
+    
+    @property
+    def version(self) -> Version:
+        return self.__version
+    
+    @property
+    def cache(self) -> bool:
+        return self.__cache
+    
+    @name.setter
+    def name(self, value: str):
+        self.__name = value
 
-        for c in columns:
-            c_shifts = [6, 12, 24] if shifts is None or c not in shifts.keys() else shifts[c]
+    @relative_path.setter
+    def relative_path(self, value: str):
+        self.__relative_path = value
 
-            if accuracy is not None and c in accuracy.keys():
-                c_accuracy = accuracy[c]
+    @version.setter
+    def version(self, value: Version):
+        self.__version = Version() if value is None else value
 
-            elif c == 'Outdoor Drybulb Temperature (C)':
-                c_accuracy = [0.3, 0.65, 1.35]
+    @cache.setter
+    def cache(self, value: bool):
+        self.__cache = self.version.cache if value is None else value
+
+    @property
+    def cache_path(self) -> str:
+        assert self.relative_path is not None, 'set relative_path to get a cache_path'
+        path = os.path.join(self.version.cache_directory, self.relative_path)
+        os.makedirs(os.path.split(path)[0], exist_ok=True)
+
+        return  path
+
+    def get(self) -> Any:
+        raise NotImplementedError
+    
+class TabularData(Data):
+    def __init__(self, name: str = None, relative_path: str = None, reader: Any = None, reader_kwargs: Mapping[str, Any] = None, version: Version = None, cache: bool = None):
+        super().__init__(name=name, relative_path=relative_path, version=version, cache=cache)
+        self.reader = reader
+        self.reader_kwargs = reader_kwargs
+
+    @Data.cache_path.getter
+    def cache_path(self) -> str:
+        path = super().cache_path
+        path = os.path.splitext(path)[0] + '.parquet'
+
+        return path
+
+    @property
+    def reader(self) -> Any:
+        return self.__reader
+    
+    @property
+    def reader_kwargs(self) -> Mapping[str, Any]:
+        return self.__reader_kwargs
+    
+    @reader.setter
+    def reader(self, value: Any):
+        self.__reader = value
+
+    @reader_kwargs.setter
+    def reader_kwargs(self, value: Mapping[str, Any]):
+        self.__reader_kwargs = {} if value is None else value
+
+    def get(self, filters: Mapping[str, List[Any]] = None) -> pd.DataFrame:
+        data: pd.DataFrame
+
+        if os.path.isfile(self.cache_path):
+            if filters is not None:
+                reader_kwargs = {'filters': [(c, 'in', v) for c, v in filters.items()]}
             
             else:
-                c_accuracy = [0.025, 0.05, 0.1]
+                reader_kwargs = {}
 
-            for s, a in zip(c_shifts, c_accuracy):
-                arr = np.roll(data[c], shift=-s)
-                random.seed(s*random_seed)
+            data = pd.read_parquet(self.cache_path, **reader_kwargs)
 
-                if c in ['Outdoor Drybulb Temperature (C)']:
-                    data[f'{s}h {c}'] = arr + np.random.uniform(-a, a, len(arr))
+        else:
+            path = urllib.parse.urljoin(self.version.url, self.relative_path)
+            data = self.reader(path, **self.reader_kwargs)
 
-                elif c in ['Outdoor Relative Humidity (%)', 'Diffuse Solar Radiation (W/m2)', 'Direct Solar Radiation (W/m2)']:
-                    data[f'{s}h {c}'] = arr + arr*np.random.uniform(-a, a, len(arr))
+            if self.cache:
+                data.to_parquet(self.cache_path)
 
-                else:
-                    raise Exception(f'Unknown field: {c}')
-                
-                if c != 'Outdoor Drybulb Temperature (C)':
-                    data[f'{s}h {c}'] = data[f'{s}h {c}'].clip(lower=0.0)
+            else:
+                pass
 
-                    if c == 'Outdoor Relative Humidity (%)':
-                        data[f'{s}h {c}'] = data[f'{s}h {c}'].clip(upper=100.0)
-                    
-                    else:
-                        pass
-
-                else:
-                    pass
+            if filters is not None:
+                for column, values in filters.items():
+                    data = data[data[column].isin(values)].copy()
+        
+            else:
+                pass
 
         return data
     
-    @staticmethod
-    def get_database(dataset_type, weather_data, year_of_publication, release, bldg_id, simulation_output_directory, simulation_id=None, reference=None):
-        reference = '2-partial' if reference is None else reference
-        simulation_id = CityLearnData.__get_simulation_id(dataset_type, weather_data, year_of_publication, release, bldg_id)\
-            if simulation_id is None else simulation_id
-        output_directory = os.path.join(simulation_output_directory, f'{simulation_id}')
-        simulation_reference_id = f'{simulation_id}-{reference}'
-        filepath = os.path.join(
-            output_directory,
-            simulation_reference_id, 
-            f'{simulation_reference_id}.sql'
-        )
-        assert os.path.isfile(filepath), f'database with filepath {filepath} does not exist.'
-        
-        return SQLiteDatabase(filepath)
+class ParquetData(TabularData):
+    def __init__(self, name: str = None, relative_path: str = None, reader_kwargs: Mapping[str, Any] = None, version: Version = None, cache: bool = None):
+        super().__init__(name=name, relative_path=relative_path, reader=pd.read_parquet, reader_kwargs=reader_kwargs, version=version, cache=cache)
     
-    @staticmethod
-    def __get_simulation_id(dataset_type, weather_data, year_of_publication, release, bldg_id):
-        simulation_id = f'{dataset_type}-{weather_data}-{year_of_publication}-release-{release}-{bldg_id}'
+class CSVData(TabularData):
+    def __init__(self, name: str = None, relative_path: str = None, version: Version = None, cache: bool = None):
+        super().__init__(name=name, relative_path=relative_path, reader=pd.read_csv, reader_kwargs={'sep': ','}, version=version, cache=cache)
+    
+class TSVData(TabularData):
+    def __init__(self, name: str = None, relative_path: str = None, version: Version = None, cache: bool = None):
+        super().__init__(name=name, relative_path=relative_path, reader=pd.read_csv, reader_kwargs={'sep': '\t'}, version=version, cache=cache)
 
-        return simulation_id
+class Metadata(ParquetData):
+    def __init__(self, version: Version = None, cache: bool = None):
+        cache = True if cache is None else cache
+        super().__init__(name='building_metadata', relative_path='metadata/metadata.parquet', version=version, cache=cache)
+
+class DataDictionary(TSVData):
+    def __init__(self, version: Version = None, cache: bool = None):
+        super().__init__(name='data_dictionary', relative_path='data_dictionary.tsv', version=version, cache=cache)
+
+class EnumerationDictionary(TSVData):
+    def __init__(self, version: Version = None, cache: bool = None):
+        super().__init__(name='enumeration_dictionary', relative_path='enumeration_dictionary.tsv', version=version, cache=cache)
+
+class UpgradeDictionary(TSVData):
+    def __init__(self, version: Version = None, cache: bool = None):
+        super().__init__(name='upgrade_dictionary', relative_path='upgrade_dictionary.tsv', version=version, cache=cache)
+
+class SpatialTract(CSVData):
+    def __init__(self, version: Version = None, cache: bool = None):
+        super().__init__(name='spatial_tract', relative_path='geographic_information/spatial_tract_lookup_table.csv', version=version, cache=cache)
+
+class BuildingData(Data):
+    def __init__(self, bldg_id: int = None, name: str = None, relative_path: str = None, version: Version = None, cache: bool = None):
+        super().__init__(name=name, relative_path=relative_path, version=version, cache=cache)
+        self.bldg_id = bldg_id
+
+    @property
+    def bldg_id(self) -> int:
+        return self.__bldg_id
+    
+    @bldg_id.setter
+    def bldg_id(self, value: int):
+        self.__bldg_id = 1 if value is None else value
+
+    def get_metadata(self) -> Mapping[str, Union[float, int, str]]:
+        metadata = Metadata(version=self.version).get()
+        metadata = metadata.loc[self.bldg_id].to_dict()
+        metadata = {'bldg_id': self.bldg_id, **metadata}
+        
+        return metadata
+
+class TimeSeries(BuildingData, ParquetData):
+    def __init__(self, bldg_id: int = None, version: Version = None, cache: bool = None):
+        super().__init__(bldg_id=bldg_id, name='building_time_series', version=version, cache=cache)
+
+    @BuildingData.relative_path.getter
+    def relative_path(self) -> str:
+        metadata = self.get_metadata()
+        upgrade = metadata['upgrade']
+        upgrade = int(upgrade)
+        county = metadata['in.county']
+        path = f'timeseries_individual_buildings/by_county/upgrade={upgrade}/county={county}/{self.bldg_id}-{upgrade}.parquet' 
+
+        return path
+
+class Schedules(BuildingData, CSVData):
+    def __init__(self, bldg_id: int = None, version: Version = None, cache: bool = None):
+        super().__init__(bldg_id=bldg_id, name='building_schedules', version=version, cache=cache)
+
+    @BuildingData.relative_path.getter
+    def relative_path(self) -> str:
+        metadata = self.get_metadata()
+        upgrade = int(metadata['upgrade'])
+        path = f'occupancy_schedules/bldg{self.bldg_id:07d}-up{upgrade:02d}.csv.gz'
+
+        return path
+
+class OpenStudioModel(BuildingData):
+    def __init__(self, bldg_id: int = None, version: Version = None, cache: bool = None):
+        super().__init__(bldg_id=bldg_id, name='building_open_studio_model', version=version, cache=cache)
+
+    @BuildingData.relative_path.getter
+    def relative_path(self) -> str:
+        metadata = self.get_metadata()
+        upgrade = int(metadata['upgrade'])
+        path = f'building_energy_models/bldg{int(self.bldg_id):07d}-up{upgrade:02d}.osm.gz'
+
+        return path
+
+    def get(self) -> str:
+        if os.path.isfile(self.cache_path):
+            with open(self.cache_path, 'r') as f:
+                data = f.read()
+
+        else:
+            url = urllib.parse.urljoin(self.version.url, self.relative_path)
+            response = requests.get(url)
+            compressed_file = io.BytesIO(response.content)
+            decompressed_file = gzip.GzipFile(fileobj=compressed_file, mode='rb')
+            data = decompressed_file.read().decode()
+
+            if self.cache:
+                with open(self.cache_path, 'w') as f:
+                    f.write(data)
+
+            else:
+                pass
+
+        return data
+    
+class Weather(BuildingData):
+    def __init__(self, bldg_id: int = None, county: str = None, version: Version = None, cache: bool = None):
+        cache = True if cache is None else cache
+        super().__init__(bldg_id=bldg_id, name='building_weather', version=version, cache=cache)
+        self.county = county
+        self.energy_plus_weather_url = 'https://raw.githubusercontent.com/NREL/EnergyPlus/develop/weather/master.geojson'
+        self.nasa_power_weather_url = 'https://power.larc.nasa.gov/api/temporal/hourly/point'
+
+    @property
+    def county(self) -> str:
+        return self.get_metadata()['in.county'] if self.__county is None else self.__county
+
+    @property
+    def cache_directory(self) -> str:
+        directory = os.path.join(self.version.cache_directory, 'weather')
+        os.makedirs(directory, exist_ok=True)
+
+        return directory
+    
+    @county.setter
+    def county(self, value: str):
+        self.__county = value
+
+    def get(self, year: int = None) -> Tuple[str, str]:
+        county = self.county
+        epw = None
+        ddy = None
+
+        if year is not None or self.version.weather_data.startswith('amy'):
+            year = self.version.weather_data.replace('amy', '') if year is None else year
+            year = int(year)
+            epw_cache_filepath = os.path.join(self.cache_directory, f'{county.lower()}_amy{year}.epw')
+            
+            if os.path.isfile(epw_cache_filepath):
+                with open(epw_cache_filepath, 'r') as f:
+                    epw = f.read()
+            
+            else:
+                epw = self.__get_amy_weather(year)
+
+                if self.cache:
+                    with open(epw_cache_filepath, 'w') as f:
+                        f.write(epw)
+
+        elif self.version.weather_data.startswith('tmy3'):
+            epw_cache_filepath = os.path.join(self.cache_directory, f'{county.lower()}_tmy3.epw')
+            ddy_cache_filepath = os.path.join(self.cache_directory, f'{county.lower()}_tmy3.ddy')
+
+            if os.path.isfile(epw_cache_filepath) and os.path.isfile(ddy_cache_filepath):
+                with open(epw_cache_filepath, 'r') as f:
+                    epw = f.read()
+
+                with open(ddy_cache_filepath, 'r') as f:
+                    ddy = f.read()
+            
+            else:
+                epw, ddy = self.__get_tmy3_weather()
+
+                if self.cache:
+                    with open(epw_cache_filepath, 'w') as f:
+                        f.write(epw)
+
+                    with open(ddy_cache_filepath, 'w') as f:
+                        f.write(ddy)   
+
+        return epw, ddy
+    
+    def convert_epw_to_csv(self, epw: str) -> pd.DataFrame:
+        columns = [
+            'Year',
+            'Month',
+            'Day',
+            'Hour',
+            'Minute',
+            'Data Source and Uncertainty Flags',
+            'Dry Bulb Temperature (C)',
+            'Dew Point Temperature (C)',
+            'Relative Humidity (%)',
+            'Atmospheric Station Pressure (Pa)',
+            'Extraterrestrial Horizontal Radiation (Wh/m2)',
+            'Extraterrestrial Direct Normal Radiation (Wh/m2)',
+            'Horizontal Infrared Radiation Intensity (Wh/m2)',
+            'Global Horizontal Radiation (Wh/m2)',
+            'Direct Normal Radiation (Wh/m2)',
+            'Diffuse Horizontal Radiation (Wh/m2)',
+            'Global Horizontal Illuminance (lux)',
+            'Direct Normal Illuminance (lux)',
+            'Diffuse Horizontal Illuminance (lux)',
+            'Zenith Luminance (Cd/m2)',
+            'Wind Direction (Degrees)',
+            'Wind Speed (m/s)',
+            'Total Sky Cover (Tenths of Coverage. 1 is 1/10 coverage. 10 is full coverage)',
+            'Opaque Sky Cover (Tenths of Coverage. 1 is 1/10 coverage. 10 is full coverage)',
+            'Visibility (km)',
+            'Ceiling Height (m)',
+            'Present Weather Observation',
+            'Present Weather Codes',
+            'Precipitable Water (mm)',
+            'Aerosol Optical Depth (thousandths)', 'Snow Depth (cm)',
+            'Days Since Last Snowfall (Days)', 'Albedo (unit less)',
+            'Liquid Precipitation Depth (mm)',
+            'Liquid Precipitation Quantity (hr)'
+        ]
+        data = pd.read_csv(io.StringIO(epw), skiprows=8, header=None, names=columns)
+        data.loc[data['Hour']==24, 'Hour'] = 0
+        data.loc[data['Minute']==60, 'Minute'] = 0
+        year = 2019 if data.shape[0] == 8760 else 2020
+        data['Timestamp'] = data.apply(lambda x: f'{year}-{x["Month"]}-{x["Day"]} {x["Hour"]}:{x["Minute"]}',axis=1)
+        data['Timestamp'] = pd.to_datetime(data['Timestamp'])
+        data = data.set_index('Timestamp', drop=True, verify_integrity=True)
+
+        return data
+
+    def get_version_csv(self) -> pd.DataFrame:
+        suffix = self.version.weather_data.strip('amy')
+        relative_path = os.path.join('weather', self.version.weather_data, f"{self.county}_{suffix}.csv")
+        csvd = CSVData(relative_path=relative_path, version=self.version, cache=self.cache)
+        data = csvd.get()
+        data['date_time'] = pd.to_datetime(data['date_time'])
+
+        return data
+    
+    def __get_amy_weather(self, year: int = None) -> str:
+        metadata = self.get_metadata()
+        params = {
+            'start': f'{year}0101',
+            'end': f'{year}1231',
+            'latitude': metadata['in.weather_file_latitude'],
+            'longitude': metadata['in.weather_file_longitude'],
+            'community': 're',
+            'parameters': ['ALLSKY_SFC_SW_DNI', 'ALLSKY_SFC_SW_DIFF', 'ALLSKY_SFC_SW_DWN', 'T2M', 'RH2M', 'WS2M'],
+            'format': 'epw',
+            'time-standard': 'lst',
+            # 'site-elevation': FileHandler.get_settings()['general']['location']['elevation'],
+        }
+        response = requests.get(self.nasa_power_weather_url, params=params)
+        epw = response.text
+        
+        return epw
+    
+    def __get_tmy3_weather(self) -> Tuple[str, str]:
+        weather_metadata = self.__get_energyplus_weather_metadata()
+        weather_metadata = weather_metadata[weather_metadata['provider']=='TMY3'].copy()
+        metadata = self.get_metadata()
+
+        if self.version.dataset_type == VersionDatasetType.RESSTOCK.value:
+            longitude = metadata['in.weather_file_longitude']
+            latitude = metadata['in.weather_file_latitude']
+
+        else:
+            resstock_metadata = Metadata(Version(
+                VersionDatasetType.RESSTOCK.value,
+                self.version.weather_data,
+                self.version.year_of_publication,
+                self.version.release,
+            )).get({'in.resstock_county_id': [metadata['in.resstock_county_id']]})
+            longitude = resstock_metadata.iloc[0]['in.weather_file_longitude']
+            latitude = resstock_metadata.iloc[0]['in.weather_file_latitude']
+
+        weather_metadata = weather_metadata[
+            (weather_metadata['longitude'].astype(str)==longitude) 
+            & (weather_metadata['latitude'].astype(str)==latitude)
+        ].copy()
+        
+        if weather_metadata.shape[0] == 0:
+            raise Exception(f'TMY3 data not found for bldg_id: {self.bldg_id} with expected weather file: {metadata["in.weather_file_tmy3"]}')
+
+        elif weather_metadata.shape[0] > 1:
+            found = sorted(weather_metadata["title"].unique().tolist())
+            raise Exception(f'TMY3 data for bldg_id: {self.bldg_id} is ambiguous. Expected weather file: {metadata["in.weather_file_tmy3"]}, found: {found}')
+        
+        else:
+            weather_metadata = weather_metadata.iloc[0].to_dict()
+            session = requests.Session()
+            retries = Retry(total=5, backoff_factor=1)
+            session.mount('http://', HTTPAdapter(max_retries=retries))
+            urllib3.disable_warnings()
+            epw = session.get(weather_metadata['epw_url']).content.decode()
+            ddy = session.get(weather_metadata['ddy_url']).content.decode(encoding='windows-1252')
+
+        return epw, ddy
+    
+    def __get_energyplus_weather_metadata(self) -> pd.DataFrame:
+        response = requests.get(self.energy_plus_weather_url)
+        response = response.json()
+        features = response['features']
+        records = []
+
+        for feature in features:
+            title = feature['properties']['title']
+            epw_url = BeautifulSoup(feature['properties']['epw'], 'html.parser').find('a')['href']
+            ddy_url = BeautifulSoup(feature['properties']['ddy'], 'html.parser').find('a')['href']
+            longitude, latitude = tuple(feature['geometry']['coordinates'])
+            region = epw_url.split('/')[3]
+            country = epw_url.split('/')[4]
+            state = epw_url.split('/')[5]
+            station_id = title.split('.')[-1].split('_')[0]
+            provider = title.split('.')[-1].split('_')[-1]
+
+            records.append({
+                'title': title,
+                'region': region,
+                'country': country,
+                'state': state,
+                'station_id': station_id,
+                'provider': provider,
+                'epw_url': epw_url,
+                'ddy_url': ddy_url,
+                'longitude': longitude,
+                'latitude': latitude,
+            })
+
+        data = pd.DataFrame(records)
+        
+        return data
