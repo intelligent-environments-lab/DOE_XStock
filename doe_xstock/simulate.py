@@ -1,3 +1,4 @@
+import hashlib
 from io import StringIO
 from multiprocessing import cpu_count
 import os
@@ -8,8 +9,9 @@ from eppy.modeleditor import IDDNotSetError, IDF
 from eppy.runner.run_functions import EnergyPlusRunError, runIDFs
 from openstudio import energyplus, isomodel, osversion, openstudiomodelcore
 import pandas as pd
-from doe_xstock.data import Version, VersionDatasetType
+from doe_xstock.data import Data, Version, VersionDatasetType
 from doe_xstock.database import SQLiteDatabase
+from doe_xstock.utilities import write_data
 
 class OpenStudioModelEditor:
     def __init__(self, osm: Union[Path, str]):
@@ -107,7 +109,10 @@ class OpenStudioModelEditor:
         return osm
 
 class EnergyPlusSimulator:
-    def __init__(self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], number_of_time_steps_per_hour: int = None, simulation_id: str = None,output_directory: Union[Path, str] = None):
+    def __init__(
+        self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], number_of_time_steps_per_hour: int = None, 
+        simulation_id: str = None, output_directory: Union[Path, str] = None,
+    ):
         self.idd_filepath = idd_filepath
         self.epw = epw
         self.idf = idf
@@ -304,33 +309,38 @@ class EnergyPlusSimulator:
         
         return idf 
     
-class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
+class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
     __DEFAULT_SCHEDULES_FILENAME = 'schedules.csv'
+    __DEFAULT_THERMOSTAT_SETPOINT_FILENAME = 'thermostat_setpoint.csv'
 
     def __init__(
-            self, version: Version, idd_filepath: Union[Path, str], model: Union[Path, str], epw: Union[Path, str], schedules_filepath: Union[Path, str] = None, 
-            number_of_time_steps_per_hour: int = None, output_variables: List[str] = None, output_meters: List[str] = None, osm: bool = None, ideal_loads: bool = None, 
-            edit_ems: bool = None, simulation_id: str = None, output_directory: Union[Path, str] = None
+            self, version: Version, idd_filepath: Union[Path, str], model: Union[Path, str], epw: Union[Path, str], 
+            schedules_filepath: Union[Path, str] = None, thermostat_setpoint_filepath: Union[Path, str] = None, number_of_time_steps_per_hour: int = None, 
+            output_variables: List[str] = None, output_meters: List[str] = None, osm: bool = None, ideal_loads: bool = None, 
+            edit_ems: bool = None, simulation_id: str = None, output_directory: Union[Path, str] = None,
+            cache: bool = None,
     ):
         self.__ideal_loads = False if ideal_loads is None else ideal_loads
         idf = self.__set_idf(model, osm=osm)
-        super().__init__(
-            idd_filepath, idf, epw, number_of_time_steps_per_hour=number_of_time_steps_per_hour, 
-            simulation_id=simulation_id, output_directory=output_directory
+        EnergyPlusSimulator.__init__(
+            self, idd_filepath, idf, epw, number_of_time_steps_per_hour=number_of_time_steps_per_hour, 
+            simulation_id=simulation_id, output_directory=output_directory,
         )
-        self.version = version
+        Data.__init__(self, version=version, cache=cache, relative_path='end_use_load_profiles_energyplus_simulator')
         self.schedules_filepath = schedules_filepath
+        self.thermostat_setpoint_filepath = thermostat_setpoint_filepath
         self.output_variables = output_variables
         self.output_meters = output_meters
         self.edit_ems = edit_ems
-
-    @property
-    def version(self) -> Version:
-        return self.__version
+        self.__cached_ideal_loads_idf_filepath = None
     
     @property
     def schedules_filepath(self) -> Union[Path, str]:
         return self.__schedules_filepath
+    
+    @property
+    def thermostat_setpoint_filepath(self) -> Union[Path, str]:
+        return self.__thermostat_setpoint_filepath
     
     @property
     def output_variables(self) -> List[str]:
@@ -344,13 +354,22 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
     def edit_ems(self) -> bool:
         return self.__edit_ems
     
-    @version.setter
-    def version(self, value: Version):
-        self.__version = value
+    @property
+    def fixed_ideal_loads_idf_cache_path(self) -> str:
+        return os.path.join(self.cache_path, 'ideal_loads_idf')
+    
+    @property
+    def cached_ideal_loads_idf_filepath(self) -> str:
+        return self.__cached_ideal_loads_idf_filepath
     
     @schedules_filepath.setter
     def schedules_filepath(self, value: Union[Path, str]):
         self.__schedules_filepath = os.path.join(self.output_directory, self.__DEFAULT_SCHEDULES_FILENAME) if value is None else value
+
+    @thermostat_setpoint_filepath.setter
+    def thermostat_setpoint_filepath(self, value: Union[Path, str]):
+        self.__thermostat_setpoint_filepath = os.path.join(self.output_directory, self.__DEFAULT_THERMOSTAT_SETPOINT_FILENAME) \
+            if value is None else value
 
     @output_variables.setter
     def output_variables(self, value: List[str]):
@@ -366,9 +385,19 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
 
     def simulate(self, **run_kwargs):
         found_objects = True
+        error_idf = self.idf
+        fixed_idf = None
+        self.__cached_ideal_loads_idf_filepath = None
+
+        if self.cache and self.__ideal_loads:
+            self.idf = self.__get_cached_fixed_ideal_loads_idf(error_idf)
+        
+        else:
+            pass
 
         while True:
             try:
+                fixed_idf = self.idf
                 super().simulate(**run_kwargs)
                 break
 
@@ -382,6 +411,13 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
 
                 else:
                     raise e
+                
+        if self.cache and self.__ideal_loads:
+            self.__cached_ideal_loads_idf_filepath = self.__cache_fixed_ideal_loads_idf(error_idf, fixed_idf)
+            
+        
+        else:
+            pass
     
     def __fix_ideal_load_ems_errors(self, found_objects: bool, patterns: List[str] = None):
         assert (self.has_ems_input_error() or self.has_ems_program_error())
@@ -520,6 +556,8 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
             for obj in idf.idfobjects['Schedule:File']:
                 if obj.Name.lower() in schedule_names:
                     obj.File_Name = self.schedules_filepath
+                    item_count = pd.read_csv(self.schedules_filepath, header=None, skiprows=obj.Rows_to_Skip_at_Top).shape[0]
+                    obj.Minutes_per_Item = int(60/(item_count/obj.Number_of_Hours_of_Data))
                 
                 else:
                     continue
@@ -527,6 +565,33 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
         elif self.version.dataset_type == VersionDatasetType.RESSTOCK.value:
             raise Exception(f'{self.version.dataset_type} building simulations require a schedules_filepath variable')
         
+        else:
+            pass
+
+        # put setpoint schedule object
+        if os.path.isfile(self.thermostat_setpoint_filepath):
+            assert len(idf.idfobjects['ThermostatSetpoint:DualSetpoint']) > 0, \
+                'Using thermostat setpoint schedule is only supported for ThermostatSetpoint:DualSetpoint objects'
+
+            for i, name in enumerate(['cooling', 'heating']):
+                obj = idf.newidfobject('Schedule:File')
+                schedule_object_name = f'thermostat {name} setpoint'
+                obj.Name = schedule_object_name
+                obj.Schedule_Type_Limits_Name = 'Temperature'
+                obj.File_Name = self.thermostat_setpoint_filepath
+                obj.Column_Number = i + 1
+                obj.Rows_to_Skip_at_Top = 1
+                obj.Number_of_Hours_of_Data = 8760
+                item_count = pd.read_csv(self.thermostat_setpoint_filepath, header=None, skiprows=obj.Rows_to_Skip_at_Top).shape[0]
+                obj.Minutes_per_Item = int(60/(item_count/obj.Number_of_Hours_of_Data))
+
+                for obj in idf.idfobjects['ThermostatSetpoint:DualSetpoint']:
+                    if name == 'cooling':
+                        obj.Cooling_Setpoint_Temperature_Schedule_Name = schedule_object_name
+
+                    else:
+                        obj.Heating_Setpoint_Temperature_Schedule_Name = schedule_object_name
+
         else:
             pass
         
@@ -562,6 +627,33 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
 
         return idf
     
+    def __cache_fixed_ideal_loads_idf(self, error_idf: str, fixed_idf) -> str:
+        filepath = self.__get_cached_fixed_ideal_loads_idf_filepath(error_idf)
+        write_data(fixed_idf, filepath)
+
+        return filepath
+    
+    def __get_cached_fixed_ideal_loads_idf(self, error_idf: str) -> str:
+        filepath = self.__get_cached_fixed_ideal_loads_idf_filepath(error_idf)
+
+        try:
+            with open(filepath, 'r') as f:
+                error_idf = f.read()
+        
+        except FileNotFoundError:
+            pass
+
+        return error_idf
+
+    def __get_cached_fixed_ideal_loads_idf_filepath(self, error_idf: str) -> str:
+        md5_hash = hashlib.md5()
+        md5_hash.update(error_idf.encode('utf-8'))
+        filename = f'{md5_hash.hexdigest()}.idf'
+        os.makedirs(self.fixed_ideal_loads_idf_cache_path, exist_ok=True)
+        filepath = os.path.join(self.fixed_ideal_loads_idf_cache_path, filename)
+
+        return filepath
+
     @classmethod
     def get_default_simulation_output_variables(cls) -> List[str]:
         variables = []
@@ -665,9 +757,6 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator):
                 pass
 
             idf = osm_model.forward_translate()
-
-        elif self.__ideal_loads:
-            raise Exception('To simulate ideal loads, model parsed at intialization must be an OpenStudio model and osm must be set to True')
         
         else:
             idf = model

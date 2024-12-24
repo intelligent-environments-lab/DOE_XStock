@@ -122,9 +122,9 @@ class EndUseLoadProfiles:
         self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
         output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, 
         default_output_variables: bool = None, default_output_meters: bool = None, model: Union[Path, str] = None, epw: Union[Path, str] = None, 
-        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, **kwargs
+        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, thermostat_setpoint: Union[Path, DataFrame, str] = None,  number_of_time_steps_per_hour: int = None, cache: bool = None, **kwargs
     ) -> EndUseLoadProfilesBuilding:
-        building = self.prepare_building_for_simulation(
+        building: EndUseLoadProfilesBuilding = self.prepare_building_for_simulation(
             bldg_id,
             idd_filepath,
             ideal_loads=ideal_loads,
@@ -139,7 +139,9 @@ class EndUseLoadProfiles:
             epw=epw,
             osm=osm,
             schedules=schedules,
+            thermostat_setpoint=thermostat_setpoint,
             number_of_time_steps_per_hour=number_of_time_steps_per_hour,
+            cache=cache,
         )
         building.simulator.simulate(**kwargs)
 
@@ -149,7 +151,7 @@ class EndUseLoadProfiles:
         self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
         output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, 
         default_output_variables: bool = None, default_output_meters: bool = None, model: Union[Path, str] = None, epw: Union[Path, str] = None, 
-        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None
+        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, thermostat_setpoint: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, cache: bool = None
     ) -> EndUseLoadProfilesBuilding:
         # set output variables and meters
         default_output_variables = False if default_output_variables is None else default_output_variables
@@ -173,7 +175,8 @@ class EndUseLoadProfiles:
             output_variables=output_variables,
             output_meters=output_meters, 
             simulation_id=simulation_id,
-            output_directory=output_directory
+            output_directory=output_directory,
+            cache=cache,
         )
 
         # set schedules
@@ -196,6 +199,24 @@ class EndUseLoadProfiles:
 
         else:
             raise Exception('Unknown schedules format')
+        
+        # set thermostat setpoint
+        if thermostat_setpoint is None:
+            pass
+        
+        else:
+            os.makedirs(Path(building.simulator.thermostat_setpoint_filepath).parent, exist_ok=True)
+            
+            if isinstance(thermostat_setpoint, (Path, str)):
+                assert os.path.isfile(thermostat_setpoint)
+                _ = shutil.copy2(thermostat_setpoint, building.simulator.thermostat_setpoint_filepath)
+
+            elif isinstance(thermostat_setpoint, DataFrame):
+                thermostat_setpoint.to_csv(building.simulator.thermostat_setpoint_filepath, index=False)
+                del thermostat_setpoint
+
+            else:
+                raise Exception('Unknown thermostat_setpoint format')
         
         # save osm model
         with open(os.path.join(building.simulator.output_directory, f'{building.simulator.simulation_id}.osm'), 'w') as f:
