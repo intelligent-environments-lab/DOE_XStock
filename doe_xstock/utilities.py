@@ -5,9 +5,9 @@ get_read_json(filepath)
     Return json document as dictionary.
 """
 
-import simplejson as json
-import os
 from datetime import datetime
+import os
+import simplejson as json
 
 def read_json(filepath):
     """Return json document as dictionary.
