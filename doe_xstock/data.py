@@ -13,8 +13,10 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
+from doe_xstock.__init__ import __version__, __appname__
 
-LOGGER = logging.getLogger()
+LOGGER = logging.getLogger(__appname__)
+LOGGER.addHandler(logging.NullHandler())
 
 @unique
 class VersionDatasetType(Enum):
@@ -39,7 +41,16 @@ class Version:
 
     @property
     def cache_directory(self) -> str:
-        directory = os.path.join(user_cache_dir('end_use_load_profiles'),str(self.year_of_publication), f'{self.dataset_type}_{self.weather_data}_release_{self.release}/')
+        cache_directory = user_cache_dir(
+            appname=__appname__,
+            version=f'v{__version__}',
+        )
+        directory = os.path.join(
+            cache_directory,
+            'end_use_load_profiles', 
+            str(self.year_of_publication), 
+            f'{self.dataset_type}_{self.weather_data}_release_{self.release}'
+        )
         os.makedirs(directory, exist_ok=True)
 
         return directory
@@ -460,7 +471,8 @@ class Weather(BuildingData):
         data = pd.read_csv(io.StringIO(epw), skiprows=8, header=None, names=columns)
         data.loc[data['Hour']==24, 'Hour'] = 0
         data.loc[data['Minute']==60, 'Minute'] = 0
-        year = 2019 if data.shape[0] == 8760 else 2020
+        years = data['Year'].unique()
+        year = (2019 if data.shape[0] == 8760 else 2020) if len(years) > 1 else years[0]
         data['Timestamp'] = data.apply(lambda x: f'{year}-{x["Month"]}-{x["Day"]} {x["Hour"]}:{x["Minute"]}',axis=1)
         data['Timestamp'] = pd.to_datetime(data['Timestamp'])
         data = data.set_index('Timestamp', drop=True, verify_integrity=True)
