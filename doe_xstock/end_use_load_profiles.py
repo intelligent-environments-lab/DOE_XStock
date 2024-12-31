@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
-import shutil
-from typing import Any, List, Mapping, Union
+from typing import Any, Callable, List, Mapping, Union
+from eppy.modeleditor import IDF
 from pandas import DataFrame
 from doe_xstock.data import (
     DataDictionary, 
@@ -122,7 +122,7 @@ class EndUseLoadProfiles:
         self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
         output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, 
         default_output_variables: bool = None, default_output_meters: bool = None, model: Union[Path, str] = None, epw: Union[Path, str] = None, 
-        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, thermostat_setpoint: Union[Path, DataFrame, str] = None,  number_of_time_steps_per_hour: int = None, cache: bool = None, **kwargs
+        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, thermostat_setpoint: Union[Path, DataFrame, str] = None,  number_of_time_steps_per_hour: int = None, idf_preprocessing_customization_function: Callable[[IDF], IDF] = None, **kwargs
     ) -> EndUseLoadProfilesBuilding:
         building: EndUseLoadProfilesBuilding = self.prepare_building_for_simulation(
             bldg_id,
@@ -141,7 +141,7 @@ class EndUseLoadProfiles:
             schedules=schedules,
             thermostat_setpoint=thermostat_setpoint,
             number_of_time_steps_per_hour=number_of_time_steps_per_hour,
-            cache=cache,
+            idf_preprocessing_customization_function=idf_preprocessing_customization_function,
         )
         building.simulator.simulate(**kwargs)
 
@@ -151,7 +151,7 @@ class EndUseLoadProfiles:
         self, bldg_id: int, idd_filepath: Union[str, Path], ideal_loads: bool = None, edit_ems: bool = None, simulation_id: str = None, 
         output_directory: Union[Path, str] = None, output_variables: List[str] = None, output_meters: List[str] = None, 
         default_output_variables: bool = None, default_output_meters: bool = None, model: Union[Path, str] = None, epw: Union[Path, str] = None, 
-        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, thermostat_setpoint: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, cache: bool = None
+        osm: bool = None, schedules: Union[Path, DataFrame, str] = None, thermostat_setpoint: Union[Path, DataFrame, str] = None, number_of_time_steps_per_hour: int = None, idf_preprocessing_customization_function: Callable[[IDF], IDF] = None,
     ) -> EndUseLoadProfilesBuilding:
         # set output variables and meters
         default_output_variables = False if default_output_variables is None else default_output_variables
@@ -176,7 +176,7 @@ class EndUseLoadProfiles:
             output_meters=output_meters, 
             simulation_id=simulation_id,
             output_directory=output_directory,
-            cache=cache,
+            idf_preprocessing_customization_function=idf_preprocessing_customization_function,
         )
 
         # set schedules
@@ -190,8 +190,8 @@ class EndUseLoadProfiles:
                 pass
         
         elif isinstance(schedules, (Path, str)):
-            assert os.path.isfile(schedules)
-            _ = shutil.copy2(schedules, building.simulator.schedules_filepath)
+            assert os.path.isfile(schedules), f'Did not find schedules at: {schedules}'
+            building.simulator.schedules_filepath = schedules
 
         elif isinstance(schedules, DataFrame):
             schedules.to_csv(building.simulator.schedules_filepath, index=False)
@@ -208,8 +208,8 @@ class EndUseLoadProfiles:
             os.makedirs(Path(building.simulator.thermostat_setpoint_filepath).parent, exist_ok=True)
             
             if isinstance(thermostat_setpoint, (Path, str)):
-                assert os.path.isfile(thermostat_setpoint)
-                _ = shutil.copy2(thermostat_setpoint, building.simulator.thermostat_setpoint_filepath)
+                assert os.path.isfile(thermostat_setpoint), f'Did not find thermostat_setpoint at: {thermostat_setpoint}'
+                building.simulator.thermostat_setpoint_filepath = thermostat_setpoint
 
             elif isinstance(thermostat_setpoint, DataFrame):
                 thermostat_setpoint.to_csv(building.simulator.thermostat_setpoint_filepath, index=False)

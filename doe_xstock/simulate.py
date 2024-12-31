@@ -4,7 +4,7 @@ from multiprocessing import cpu_count
 import os
 from pathlib import Path
 import re
-from typing import List, Mapping, Union
+from typing import Callable, List, Mapping, Union
 from eppy.modeleditor import IDDNotSetError, IDF
 from eppy.runner.run_functions import EnergyPlusRunError, runIDFs
 from openstudio import energyplus, isomodel, osversion, openstudiomodelcore
@@ -111,7 +111,7 @@ class OpenStudioModelEditor:
 class EnergyPlusSimulator:
     def __init__(
         self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], number_of_time_steps_per_hour: int = None, 
-        simulation_id: str = None, output_directory: Union[Path, str] = None,
+        simulation_id: str = None, output_directory: Union[Path, str] = None, idf_preprocessing_customization_function: Callable[[IDF], IDF] = None
     ):
         self.idd_filepath = idd_filepath
         self.epw = epw
@@ -119,8 +119,9 @@ class EnergyPlusSimulator:
         self.number_of_time_steps_per_hour = number_of_time_steps_per_hour
         self.simulation_id = simulation_id
         self.output_directory = output_directory
+        self.idf_preprocessing_customization_function = idf_preprocessing_customization_function
         self.__epw_filepath = None
-    
+            
     @property
     def idd_filepath(self) -> str:
         return self.__idd_filepath
@@ -144,6 +145,10 @@ class EnergyPlusSimulator:
     @property
     def output_directory(self) -> Union[Path, str]:
         return self.__output_directory
+    
+    @property
+    def idf_preprocessing_customization_function(self) -> Callable[[IDF], IDF]:
+        return self.__idf_preprocessing_customization_function
 
     @property
     def epw_filepath(self) -> str:
@@ -188,6 +193,16 @@ class EnergyPlusSimulator:
     def output_directory(self, value: Union[Path, str]):
         self.__output_directory = os.path.abspath(value) if value is not None else os.path.abspath(self.simulation_id)
 
+    @idf_preprocessing_customization_function.setter
+    def idf_preprocessing_customization_function(self, value: Callable[[IDF], IDF]):
+        if value is None:
+            value = lambda idf: idf
+        
+        else:
+            pass
+
+        self.__idf_preprocessing_customization_function = value
+
     def get_output_database(self) -> SQLiteDatabase:
         filepath = os.path.join(self.output_directory, f'{self.simulation_id}.sql')
 
@@ -228,6 +243,7 @@ class EnergyPlusSimulator:
             os.makedirs(simulator.output_directory, exist_ok=True)
             simulator.__write_epw()
             idf = simulator.preprocess_idf_for_simulation()
+            idf = simulator.idf_preprocessing_customization_function(idf)
             simulator.__write_idf(idf.idfstr())
             kwargs = simulator.get_run_kwargs()
             runs.append([idf, kwargs])
@@ -239,6 +255,7 @@ class EnergyPlusSimulator:
         run_kwargs = self.get_run_kwargs(**run_kwargs if run_kwargs is not None else {})
         self.__write_epw()
         idf = self.preprocess_idf_for_simulation()
+        idf = self.idf_preprocessing_customization_function(idf)
         self.__write_idf(idf.idfstr())
         idf.run(**run_kwargs)
 
@@ -318,13 +335,14 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
             schedules_filepath: Union[Path, str] = None, thermostat_setpoint_filepath: Union[Path, str] = None, number_of_time_steps_per_hour: int = None, 
             output_variables: List[str] = None, output_meters: List[str] = None, osm: bool = None, ideal_loads: bool = None, 
             edit_ems: bool = None, simulation_id: str = None, output_directory: Union[Path, str] = None,
-            cache: bool = None,
+            idf_preprocessing_customization_function: Callable[[IDF], IDF] = None, cache: bool = None,
     ):
         self.__ideal_loads = False if ideal_loads is None else ideal_loads
         idf = self.__set_idf(model, osm=osm)
         EnergyPlusSimulator.__init__(
             self, idd_filepath, idf, epw, number_of_time_steps_per_hour=number_of_time_steps_per_hour, 
-            simulation_id=simulation_id, output_directory=output_directory,
+            simulation_id=simulation_id, output_directory=output_directory, 
+            idf_preprocessing_customization_function=idf_preprocessing_customization_function
         )
         Data.__init__(self, version=version, cache=cache, relative_path='end_use_load_profiles_energyplus_simulator')
         self.schedules_filepath = schedules_filepath
@@ -332,7 +350,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
         self.output_variables = output_variables
         self.output_meters = output_meters
         self.edit_ems = edit_ems
-        self.__cached_ideal_loads_idf_filepath = None
+        self.__cached_fixed_ideal_loads_idf_filepath = None
     
     @property
     def schedules_filepath(self) -> Union[Path, str]:
@@ -359,8 +377,8 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
         return os.path.join(self.cache_path, 'ideal_loads_idf')
     
     @property
-    def cached_ideal_loads_idf_filepath(self) -> str:
-        return self.__cached_ideal_loads_idf_filepath
+    def cached_fixed_ideal_loads_idf_filepath(self) -> str:
+        return self.__cached_fixed_ideal_loads_idf_filepath
     
     @schedules_filepath.setter
     def schedules_filepath(self, value: Union[Path, str]):
@@ -387,7 +405,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
         found_objects = True
         error_idf = self.idf
         fixed_idf = None
-        self.__cached_ideal_loads_idf_filepath = None
+        self.__cached_fixed_ideal_loads_idf_filepath = None
 
         if self.cache and self.__ideal_loads:
             self.idf = self.__get_cached_fixed_ideal_loads_idf(error_idf)
@@ -413,7 +431,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
                     raise e
                 
         if self.cache and self.__ideal_loads:
-            self.__cached_ideal_loads_idf_filepath = self.__cache_fixed_ideal_loads_idf(error_idf, fixed_idf)
+            self.__cached_fixed_ideal_loads_idf_filepath = self.__cache_fixed_ideal_loads_idf(error_idf, fixed_idf)
             
         
         else:
