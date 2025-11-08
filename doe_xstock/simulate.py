@@ -111,7 +111,7 @@ class OpenStudioModelEditor:
 class EnergyPlusSimulator:
     def __init__(
         self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], number_of_time_steps_per_hour: int = None, 
-        simulation_id: str = None, output_directory: Union[Path, str] = None, idf_preprocessing_customization_function: Callable[[IDF], IDF] = None
+        simulation_id: str = None, output_directory: Union[Path, str] = None, idf_preprocessing_customization_function: Callable[[IDF], IDF] = None, idf_preprocessing_customization_function_kwargs: dict = None
     ):
         self.idd_filepath = idd_filepath
         self.epw = epw
@@ -120,6 +120,7 @@ class EnergyPlusSimulator:
         self.simulation_id = simulation_id
         self.output_directory = output_directory
         self.idf_preprocessing_customization_function = idf_preprocessing_customization_function
+        self.idf_preprocessing_customization_function_kwargs = idf_preprocessing_customization_function_kwargs
         self.__epw_filepath = None
             
     @property
@@ -149,6 +150,10 @@ class EnergyPlusSimulator:
     @property
     def idf_preprocessing_customization_function(self) -> Callable[[IDF], IDF]:
         return self.__idf_preprocessing_customization_function
+    
+    @property
+    def idf_preprocessing_customization_function_kwargs(self) -> dict:
+        return self.__idf_preprocessing_customization_function_kwargs
 
     @property
     def epw_filepath(self) -> str:
@@ -203,6 +208,10 @@ class EnergyPlusSimulator:
 
         self.__idf_preprocessing_customization_function = value
 
+    @idf_preprocessing_customization_function_kwargs.setter
+    def idf_preprocessing_customization_function_kwargs(self, value: dict):
+        self.__idf_preprocessing_customization_function_kwargs = {} if value is None else value 
+
     def get_output_database(self) -> SQLiteDatabase:
         filepath = os.path.join(self.output_directory, f'{self.simulation_id}.sql')
 
@@ -241,10 +250,11 @@ class EnergyPlusSimulator:
 
         for simulator in simulators:
             os.makedirs(simulator.output_directory, exist_ok=True)
-            simulator.__write_epw()
+            simulator._write_epw()
             idf = simulator.preprocess_idf_for_simulation()
-            idf = simulator.idf_preprocessing_customization_function(idf)
-            simulator.__write_idf(idf.idfstr())
+            idf_preprocessing_customization_function_kwargs = {'idf': idf, **simulator.idf_preprocessing_customization_function_kwargs}
+            idf = simulator.idf_preprocessing_customization_function(**idf_preprocessing_customization_function_kwargs)
+            simulator._write_idf(idf.idfstr())
             kwargs = simulator.get_run_kwargs()
             runs.append([idf, kwargs])
         
@@ -253,10 +263,11 @@ class EnergyPlusSimulator:
     def simulate(self, **run_kwargs):
         os.makedirs(self.output_directory, exist_ok=True)
         run_kwargs = self.get_run_kwargs(**run_kwargs if run_kwargs is not None else {})
-        self.__write_epw()
+        self._write_epw()
         idf = self.preprocess_idf_for_simulation()
-        idf = self.idf_preprocessing_customization_function(idf)
-        self.__write_idf(idf.idfstr())
+        idf_preprocessing_customization_function_kwargs = {'idf': idf, **self.idf_preprocessing_customization_function_kwargs}
+        idf = self.idf_preprocessing_customization_function(**idf_preprocessing_customization_function_kwargs)
+        self._write_idf(idf.idfstr())
         idf.run(**run_kwargs)
 
     def get_error(self) -> str:
@@ -286,7 +297,7 @@ class EnergyPlusSimulator:
 
         return options
 
-    def __write_epw(self):
+    def _write_epw(self):
         filepath = os.path.join(self.output_directory, 'weather.epw')
 
         with open(filepath, 'w') as f:
@@ -294,7 +305,7 @@ class EnergyPlusSimulator:
         
         self.__epw_filepath = filepath
 
-    def __write_idf(self, idf: str):
+    def _write_idf(self, idf: str):
         filepath = os.path.join(self.output_directory,f'{self.simulation_id}.idf')
 
         with open(filepath, 'w') as f:
