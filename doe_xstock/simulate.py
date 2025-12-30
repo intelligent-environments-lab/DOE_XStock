@@ -4,22 +4,91 @@ from multiprocessing import cpu_count
 import os
 from pathlib import Path
 import re
-from typing import Callable, List, Mapping, Union
+import shutil
+import subprocess
+from typing import Any, Callable, List, Mapping, Union
 from eppy.modeleditor import IDDNotSetError, IDF
 from eppy.runner.run_functions import EnergyPlusRunError, runIDFs
+import openstudio
 from openstudio import energyplus, isomodel, osversion, openstudiomodelcore
 import pandas as pd
 from doe_xstock.data import Data, Version, VersionDatasetType
 from doe_xstock.database import SQLiteDatabase
-from doe_xstock.utilities import write_data
+from doe_xstock.utilities import FileHandler
 
-class OpenStudioModelEditor:
-    def __init__(self, osm: Union[Path, str]):
+class Base:
+    def __init__(self, simulation_id: str = None, output_directory: Union[Path, str] = None, epw: Union[Path, str] = None):
+        self.simulation_id = simulation_id
+        self.output_directory = output_directory
+        self.epw = epw
+        self.__epw_filepath = None
+
+    @property
+    def simulation_id(self) -> str:
+        return self.__simulation_id
+    
+    @property
+    def output_directory(self) -> Union[Path, str]:
+        return self.__output_directory
+
+    @property
+    def epw(self) -> Union[Path, str]:
+        return self.__epw
+
+    @property
+    def epw_filepath(self) -> str:
+        return self.__epw_filepath
+    
+    @epw.setter
+    def epw(self, value: Union[Path, str]):
+        if value is not None and os.path.isfile(value):
+            with open(value, 'r') as f:
+                value = f.read()
+
+        else:
+            pass
+
+        self.__epw = value
+
+    @simulation_id.setter
+    def simulation_id(self, value: str):
+        self.__simulation_id = value if value is not None else 'simulation'
+
+    @output_directory.setter
+    def output_directory(self, value: Union[Path, str]):
+        self.__output_directory = os.path.abspath(value) if value is not None else os.path.abspath(self.simulation_id)
+
+    def _write_epw(self):
+        filepath = os.path.join(self.output_directory, 'weather.epw')
+
+        with open(filepath, 'w') as f:
+            f.write(self.epw)
+        
+        self.__epw_filepath = filepath
+
+class OpenStudioModelEditor(Base):
+    def __init__(self, osm: Union[Path, str], measures_directory: Union[Path, str] = None, executable_path: Union[Path, str] = None, root_directory: Union[Path, str] = None, simulation_id: str = None, output_directory: Union[Path, str] = None, epw: Union[Path, str] = None):
+        super().__init__(simulation_id=simulation_id, output_directory=output_directory, epw=epw)
         self.osm = osm
+        self.measures_directory = measures_directory
+        self.executable_path = executable_path
+        self.root_directory = root_directory
 
     @property
     def osm(self) -> str:
         return self.__osm
+
+    @property
+    def measures_directory(self) -> Union[Path, str]:
+        return self.__measures_directory
+    
+    @property
+    def executable_path(self) -> Union[Path, str]:
+        return self.__executable_path
+    
+    @property
+    def root_directory(self) -> Union[Path, str]:
+        return self.__root_directory
 
     @osm.setter
     def osm(self, value: Union[Path, str]):
@@ -32,6 +101,18 @@ class OpenStudioModelEditor:
 
         self.__osm = value
 
+    @measures_directory.setter
+    def measures_directory(self, value: Union[Path, str]):
+        self.__measures_directory = value
+
+    @executable_path.setter
+    def executable_path(self, value: Union[Path, str]):
+        self.__executable_path = value
+
+    @root_directory.setter
+    def root_directory(self, value: Union[Path, str]):
+        self.__root_directory = value
+
     def forward_translate(self) -> str:
         osm = self.get_model()
         forward_translator = energyplus.ForwardTranslator()
@@ -39,6 +120,89 @@ class OpenStudioModelEditor:
         idf = str(idf)
 
         return idf
+    
+    def apply_measures(self, measures: list[tuple[str, dict[str, Any]]], overwrite: bool = None, simulate: bool = None) -> tuple[bool, str, str, str, SQLiteDatabase]:
+        overwrite = True if overwrite is False else overwrite
+        simulate = False if simulate is None else simulate
+
+        assert self.root_directory is not None
+        assert self.executable_path is not None
+        assert self.measures_directory is not None
+        assert self.epw is not None
+
+        # create simulation directory
+        simulation_directory = os.path.join(self.output_directory, self.simulation_id)
+        workflow_filepath = os.path.join(simulation_directory, f'{self.simulation_id}.osw')
+        seed_model_filepath = os.path.join(simulation_directory, f'{self.simulation_id}.osm')
+
+        if os.path.isdir(simulation_directory):
+            shutil.rmtree(simulation_directory)
+        
+        else:
+            pass
+        
+        os.makedirs(simulation_directory, exist_ok=True)
+
+        # initialize workflow
+        workflow = openstudio.WorkflowJSON()
+
+        # set seed model
+        FileHandler.write_data(self.osm, seed_model_filepath)
+        workflow.setSeedFile(seed_model_filepath)
+
+        # set EPW weather file
+        self._write_epw()
+        workflow.setWeatherFile(self.epw_filepath)
+
+        # add measures
+        workflow.addMeasurePath(self.measures_directory)
+        measure_steps = []
+
+        for m, a in measures:
+            measure_step = openstudio.MeasureStep(m)
+
+            for k, v in a.items():
+                measure_step.setArgument(k, v)
+
+            measure_steps.append(measure_step)
+
+        workflow.setWorkflowSteps(measure_steps)
+
+
+        # save workflow
+        workflow.setOswPath(workflow_filepath)
+        workflow.save()
+
+        # run simulation
+        args = [self.executable_path, 'run', '-w', workflow_filepath]
+        args += ['-m'] if not simulate else []
+        _ = subprocess.run(args, cwd=self.root_directory)
+
+        # get results
+        osm_filepath = os.path.join(simulation_directory, 'run', 'in.osm')
+        idf_filepath = os.path.join(os.path.join(simulation_directory, 'run', 'in.idf'))
+        osm = FileHandler.get_data_from_path(osm_filepath)
+        idf = FileHandler.get_data_from_path(idf_filepath)
+        status = FileHandler.read_json(os.path.join(simulation_directory, 'out.osw'))['completed_status']
+        status = True if status == 'Success' else False
+
+        if simulate:
+            database = self.__get_output_database(simulation_directory)
+        
+        else:
+            database = None
+
+        return status, osm, idf, simulation_directory, database
+    
+    def __get_output_database(self, simulation_directory: Union[Path, str]) -> SQLiteDatabase:
+        filepath = os.path.join(simulation_directory, 'run', f'eplusout.sql')
+
+        if os.path.isfile(filepath):
+            return SQLiteDatabase(filepath)
+        
+        else:
+            raise FileNotFoundError(f'No SQLite database exists for simulation. Make sure a simluation has been run'\
+                ' using simulate function and the simulation is set to output into SQLite database.')
 
     def use_ideal_loads_air_system(self):
         # Reference: https://www.rubydoc.info/gems/openstudio-standards/Standard#remove_hvac-instance_method
@@ -108,20 +272,15 @@ class OpenStudioModelEditor:
         
         return osm
 
-class EnergyPlusSimulator:
+class EnergyPlusSimulator(Base):
     def __init__(
-        self, idd_filepath: Union[Path, str], idf: Union[Path, str], epw: Union[Path, str], number_of_time_steps_per_hour: int = None, 
-        simulation_id: str = None, output_directory: Union[Path, str] = None, idf_preprocessing_customization_function: Callable[[IDF], IDF] = None, idf_preprocessing_customization_function_kwargs: dict = None
-    ):
+        self, idd_filepath: Union[Path, str], idf: Union[Path, str], number_of_time_steps_per_hour: int = None,idf_preprocessing_customization_function: Callable[[IDF], IDF] = None, idf_preprocessing_customization_function_kwargs: dict = None, simulation_id: str = None, output_directory: Union[Path, str] = None, epw: Union[Path, str] = None):
+        super().__init__(simulation_id=simulation_id, output_directory=output_directory, epw=epw)
         self.idd_filepath = idd_filepath
-        self.epw = epw
         self.idf = idf
         self.number_of_time_steps_per_hour = number_of_time_steps_per_hour
-        self.simulation_id = simulation_id
-        self.output_directory = output_directory
         self.idf_preprocessing_customization_function = idf_preprocessing_customization_function
         self.idf_preprocessing_customization_function_kwargs = idf_preprocessing_customization_function_kwargs
-        self.__epw_filepath = None
             
     @property
     def idd_filepath(self) -> str:
@@ -130,10 +289,6 @@ class EnergyPlusSimulator:
     @property
     def idf(self) -> str:
         return self.__idf
-
-    @property
-    def epw(self) -> str:
-        return self.__epw
     
     @property
     def number_of_time_steps_per_hour(self) -> int:
@@ -155,10 +310,6 @@ class EnergyPlusSimulator:
     def idf_preprocessing_customization_function_kwargs(self) -> dict:
         return self.__idf_preprocessing_customization_function_kwargs
 
-    @property
-    def epw_filepath(self) -> str:
-        return self.__epw_filepath
-
     @idd_filepath.setter
     def idd_filepath(self, value: Union[Path, str]):
         self.__idd_filepath = value
@@ -174,17 +325,6 @@ class EnergyPlusSimulator:
             pass
 
         self.__idf = value
-
-    @epw.setter
-    def epw(self, value: Union[Path, str]):
-        if os.path.isfile(value):
-            with open(value, 'r') as f:
-                value = f.read()
-
-        else:
-            pass
-
-        self.__epw = value
 
     @number_of_time_steps_per_hour.setter
     def number_of_time_steps_per_hour(self, value: int):
@@ -288,7 +428,7 @@ class EnergyPlusSimulator:
             'output_prefix': str(self.simulation_id),
             'output_suffix': 'C',
             'output_directory': str(self.output_directory),
-            'readvars': True,
+            'readvars': False,
             'expandobjects': True,
             'idd': self.idd_filepath,
             'verbose': 'q',
@@ -296,14 +436,6 @@ class EnergyPlusSimulator:
         options = {**options, **kwargs}
 
         return options
-
-    def _write_epw(self):
-        filepath = os.path.join(self.output_directory, 'weather.epw')
-
-        with open(filepath, 'w') as f:
-            f.write(self.epw)
-        
-        self.__epw_filepath = filepath
 
     def _write_idf(self, idf: str):
         filepath = os.path.join(self.output_directory,f'{self.simulation_id}.idf')
@@ -658,7 +790,7 @@ class EndUseLoadProfilesEnergyPlusSimulator(EnergyPlusSimulator, Data):
     
     def __cache_fixed_ideal_loads_idf(self, error_idf: str, fixed_idf) -> str:
         filepath = self.__get_cached_fixed_ideal_loads_idf_filepath(error_idf)
-        write_data(fixed_idf, filepath)
+        FileHandler.write_data(fixed_idf, filepath)
 
         return filepath
     
